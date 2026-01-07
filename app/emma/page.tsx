@@ -15,7 +15,7 @@ interface AIContext {
 }
 
 // GIF types matching our API
-type GifType = 'welcome' | 'name_reaction' | 'thank_you' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell';
+type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'cool_name' | 'thank_you' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy';
 
 interface GifData {
   url: string;
