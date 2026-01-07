@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/sdpp/$1",
+      "has": [
+        {
+          "type": "host",
+          "value": "sdpp.asktha.com"
+        }
+      ]
+    }
+  ]
+}
