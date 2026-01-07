@@ -3,10 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 // GIPHY API key - set in environment variables
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
 
-if (!GIPHY_API_KEY) {
-  console.error('GIPHY_API_KEY not set in environment variables');
-}
-
 // Curated search terms for different reaction types
 const REACTION_SEARCHES: Record<string, string[]> = {
   welcome: ['welcome', 'hello wave', 'hey there', 'greetings'],
@@ -46,8 +42,6 @@ export async function GET(request: NextRequest) {
     const searchTerm = random 
       ? searches[Math.floor(Math.random() * searches.length)]
       : searches[0];
-
-    console.log('Fetching GIF for:', searchTerm, 'type:', type);
 
     // Fetch from GIPHY
     const response = await fetch(
