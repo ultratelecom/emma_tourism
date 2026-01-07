@@ -179,7 +179,7 @@ const EMMA_MESSAGES = {
     else return "Tobago will make up for it! 💪";
   },
   askActivities: "What excites you most about Tobago?",
-  activityResponse: (activity: string) => {
+  activityResponse: (activity: string): string => {
     const responses: Record<string, string> = {
       beach: "Beach lover! Try Pigeon Point! 🏖️",
       adventure: "Adventurer! Hit the Main Ridge! 🌴",
@@ -187,7 +187,7 @@ const EMMA_MESSAGES = {
       nightlife: "Party time! Buccoo Sunday School! 🎵",
       photos: "Photographer! Every corner is a shot! 📸",
     };
-    return responses[activity] || ["Great choice! You're going to have an amazing time!"];
+    return responses[activity] || "Great choice! Have an amazing time!";
   },
   complete: [
     "You're officially ready for Tobago! 🎊",
