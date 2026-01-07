@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle } from 'lucide-react';
+import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle } from 'lucide-react';
 
 // AI Response helper - fetches personalized responses from Emma
 type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell';
@@ -453,12 +453,29 @@ function StarRating({ onSelect, disabled }: { onSelect: (rating: number) => void
   );
 }
 
-// Arrival options selector
+// Arrival options selector - Premium card buttons
 function ArrivalSelector({ options, onSelect, disabled }: { 
   options: ArrivalOption[]; 
   onSelect: (id: string) => void;
   disabled: boolean;
 }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  
+  const handleSelect = (id: string) => {
+    if (disabled || selected) return;
+    setSelected(id);
+    setTimeout(() => onSelect(id), 300);
+  };
+
+  const getGradient = (id: string) => {
+    switch (id) {
+      case 'plane': return 'from-sky-400 to-blue-500';
+      case 'cruise': return 'from-teal-400 to-cyan-500';
+      case 'ferry': return 'from-indigo-400 to-purple-500';
+      default: return 'from-coral to-sunset';
+    }
+  };
+
   return (
     <div className="flex items-end gap-3 animate-message-appear">
       <EmmaAvatar />
@@ -466,17 +483,37 @@ function ArrivalSelector({ options, onSelect, disabled }: {
         <div className="bg-white rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm border border-sand-200 mb-3">
           <p className="text-[15px] text-slate-700">{EMMA_MESSAGES.askArrival}</p>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-3">
           {options.map((option, index) => (
             <button
               key={option.id}
-              onClick={() => onSelect(option.id)}
-              disabled={disabled}
+              onClick={() => handleSelect(option.id)}
+              disabled={disabled || !!selected}
               style={{ animationDelay: `${index * 100}ms` }}
-              className="group flex flex-col items-center gap-2 p-4 rounded-2xl bg-white border-2 border-sand-200 hover:border-coral hover:bg-coral/5 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm animate-fade-in hover:shadow-md"
+              className={`group relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-all duration-300 animate-fade-in overflow-hidden ${
+                selected === option.id
+                  ? `bg-gradient-to-br ${getGradient(option.id)} text-white shadow-lg scale-105`
+                  : 'bg-white hover:bg-gradient-to-br hover:' + getGradient(option.id).replace('from-', 'hover:from-').replace('to-', 'hover:to-') + ' border-2 border-sand-200 hover:border-transparent hover:text-white shadow-sm hover:shadow-xl hover:scale-105'
+              } active:scale-95 disabled:cursor-not-allowed`}
             >
-              <span className="text-3xl group-hover:scale-110 transition-transform group-hover:animate-bounce">{option.emoji}</span>
-              <span className="text-xs font-medium text-slate-600 group-hover:text-coral">{option.label}</span>
+              {/* Shimmer effect */}
+              <div className={`absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ${selected === option.id ? 'translate-x-full' : ''}`} />
+              
+              <span className={`text-4xl transition-transform duration-300 ${selected === option.id ? 'scale-110 animate-bounce' : 'group-hover:scale-110'}`}>
+                {option.emoji}
+              </span>
+              <span className={`text-xs font-semibold transition-colors ${
+                selected === option.id ? 'text-white' : 'text-slate-600 group-hover:text-white'
+              }`}>
+                {option.label}
+              </span>
+              
+              {/* Check mark when selected */}
+              {selected === option.id && (
+                <div className="absolute top-2 right-2 w-5 h-5 bg-white/30 rounded-full flex items-center justify-center animate-scale-in">
+                  <Check className="w-3 h-3 text-white" />
+                </div>
+              )}
             </button>
           ))}
         </div>
@@ -485,7 +522,7 @@ function ArrivalSelector({ options, onSelect, disabled }: {
   );
 }
 
-// Activity options selector (multiple choice)
+// Activity options selector (multiple choice) - Premium list buttons
 function ActivitySelector({ options, onSelect, disabled }: { 
   options: ActivityOption[]; 
   onSelect: (id: string) => void;
@@ -496,7 +533,18 @@ function ActivitySelector({ options, onSelect, disabled }: {
   const handleSelect = (id: string) => {
     if (disabled || selected) return;
     setSelected(id);
-    onSelect(id);
+    setTimeout(() => onSelect(id), 300);
+  };
+
+  const getColor = (id: string) => {
+    switch (id) {
+      case 'beach': return { bg: 'from-cyan-400 to-teal-500', text: 'text-teal-600', ring: 'ring-teal-400' };
+      case 'adventure': return { bg: 'from-green-400 to-emerald-500', text: 'text-emerald-600', ring: 'ring-emerald-400' };
+      case 'food': return { bg: 'from-orange-400 to-red-500', text: 'text-orange-600', ring: 'ring-orange-400' };
+      case 'nightlife': return { bg: 'from-purple-400 to-pink-500', text: 'text-purple-600', ring: 'ring-purple-400' };
+      case 'photos': return { bg: 'from-blue-400 to-indigo-500', text: 'text-blue-600', ring: 'ring-blue-400' };
+      default: return { bg: 'from-coral to-sunset', text: 'text-coral', ring: 'ring-coral' };
+    }
   };
 
   return (
@@ -507,37 +555,59 @@ function ActivitySelector({ options, onSelect, disabled }: {
           <p className="text-[15px] text-slate-700">{EMMA_MESSAGES.askActivities}</p>
         </div>
         <div className="space-y-2">
-          {options.map((option, index) => (
-            <button
-              key={option.id}
-              onClick={() => handleSelect(option.id)}
-              disabled={disabled || !!selected}
-              style={{ animationDelay: `${index * 80}ms` }}
-              className={`group w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all animate-fade-in ${
-                selected === option.id
-                  ? 'bg-palm/10 border-palm shadow-md'
-                  : 'bg-white border-sand-200 hover:border-palm hover:bg-palm/5'
-              } active:scale-[0.98] disabled:cursor-not-allowed shadow-sm`}
-            >
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                selected === option.id
-                  ? 'bg-palm text-white'
-                  : 'bg-sand-100 text-slate-500 group-hover:bg-palm/20 group-hover:text-palm'
-              }`}>
-                <span className="text-xl">{option.emoji}</span>
-              </div>
-              <span className={`flex-1 text-left text-sm font-medium ${
-                selected === option.id ? 'text-palm-dark' : 'text-slate-600 group-hover:text-palm-dark'
-              }`}>
-                {option.label}
-              </span>
-              {selected === option.id && (
-                <div className="w-6 h-6 rounded-full bg-palm flex items-center justify-center animate-scale-in">
-                  <Check className="w-4 h-4 text-white" />
+          {options.map((option, index) => {
+            const colors = getColor(option.id);
+            return (
+              <button
+                key={option.id}
+                onClick={() => handleSelect(option.id)}
+                disabled={disabled || !!selected}
+                style={{ animationDelay: `${index * 80}ms` }}
+                className={`group relative w-full flex items-center gap-4 p-4 rounded-2xl transition-all duration-300 animate-fade-in overflow-hidden ${
+                  selected === option.id
+                    ? `bg-gradient-to-r ${colors.bg} text-white shadow-lg ring-2 ${colors.ring} ring-offset-2`
+                    : 'bg-white border-2 border-sand-200 hover:border-transparent hover:shadow-lg'
+                } active:scale-[0.98] disabled:cursor-not-allowed`}
+              >
+                {/* Hover gradient overlay */}
+                {selected !== option.id && (
+                  <div className={`absolute inset-0 bg-gradient-to-r ${colors.bg} opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />
+                )}
+                
+                {/* Shimmer effect */}
+                <div className={`absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700`} />
+                
+                <div className={`relative z-10 w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
+                  selected === option.id
+                    ? 'bg-white/20'
+                    : `bg-gradient-to-br ${colors.bg} group-hover:bg-white/20`
+                }`}>
+                  <span className={`text-2xl transition-transform duration-300 ${selected === option.id ? 'scale-110' : 'group-hover:scale-110'}`}>
+                    {option.emoji}
+                  </span>
                 </div>
-              )}
-            </button>
-          ))}
+                
+                <span className={`relative z-10 flex-1 text-left text-[15px] font-semibold transition-colors duration-300 ${
+                  selected === option.id ? 'text-white' : 'text-slate-700 group-hover:text-white'
+                }`}>
+                  {option.label}
+                </span>
+                
+                {/* Check mark or arrow */}
+                <div className="relative z-10">
+                  {selected === option.id ? (
+                    <div className="w-7 h-7 rounded-full bg-white/30 flex items-center justify-center animate-scale-in">
+                      <Check className="w-4 h-4 text-white" />
+                    </div>
+                  ) : (
+                    <div className={`w-7 h-7 rounded-full bg-sand-100 flex items-center justify-center transition-all duration-300 group-hover:bg-white/30`}>
+                      <ChevronRight className={`w-4 h-4 ${colors.text} group-hover:text-white transition-colors`} />
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
