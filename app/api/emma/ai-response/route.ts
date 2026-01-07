@@ -94,7 +94,6 @@ Keep it SHORT (1 sentence). Make them feel excited about their Tobago adventure.
       model: openai('gpt-4o-mini'),
       system: EMMA_SYSTEM_PROMPT,
       prompt: userPrompt,
-      maxTokens: 100,
       temperature: 0.9, // Higher for more variety
     });
 
