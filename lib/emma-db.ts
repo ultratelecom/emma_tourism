@@ -103,14 +103,14 @@ export async function getEmmaSurveyStats(): Promise<{
   `;
 
   const arrivalBreakdown: Record<string, number> = {};
-  arrivalResult.forEach((row: { arrival_method: string; count: string }) => {
-    arrivalBreakdown[row.arrival_method] = Number(row.count);
-  });
+  for (const row of arrivalResult) {
+    arrivalBreakdown[row.arrival_method as string] = Number(row.count);
+  }
 
   const activityBreakdown: Record<string, number> = {};
-  activityResult.forEach((row: { activity_interest: string; count: string }) => {
-    activityBreakdown[row.activity_interest] = Number(row.count);
-  });
+  for (const row of activityResult) {
+    activityBreakdown[row.activity_interest as string] = Number(row.count);
+  }
 
   return {
     total_surveys: Number(totalResult[0].total_surveys),
