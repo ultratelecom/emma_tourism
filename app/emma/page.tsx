@@ -14,6 +14,28 @@ interface AIContext {
   activity?: 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos';
 }
 
+// GIF types matching our API
+type GifType = 'welcome' | 'name_reaction' | 'thank_you' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell';
+
+interface GifData {
+  url: string;
+  width: string;
+  height: string;
+  title: string;
+}
+
+// Fetch a GIF reaction
+async function getReactionGif(type: GifType): Promise<GifData | null> {
+  try {
+    const response = await fetch(`/api/emma/gif?type=${type}&random=true`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.error('GIF fetch error:', error);
+    return null;
+  }
+}
+
 async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Promise<string> {
   try {
     const response = await fetch('/api/emma/ai-response', {
@@ -28,10 +50,10 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
     return data.response;
   } catch (error) {
     console.error('AI response error:', error);
-    // Fallback responses
+    // Fallback responses - simple and human
     const fallbacks: Record<AIResponseType, string> = {
-      name_reaction: `${context.name}! What a lovely name! 🌺`,
-      email_thanks: "Perfect! I'll send you some amazing island tips! ✨",
+      name_reaction: `Nice to meet you, ${context.name}!`,
+      email_thanks: "Got it, thanks!",
       arrival_reaction: "What a wonderful way to arrive in paradise! 🏝️",
       rating_reaction: "Thanks for sharing! Tobago is about to amaze you! 🌴",
       activity_tip: "You're going to love exploring our beautiful island!",
@@ -46,12 +68,14 @@ type SurveyStep = 'splash' | 'welcome' | 'name' | 'email' | 'arrival' | 'rating'
 
 interface Message {
   id: string;
-  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip';
+  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip' | 'gif';
   content: string;
   timestamp: Date;
   animate?: boolean;
   delivered?: boolean;
   read?: boolean;
+  reaction?: 'heart' | 'like' | 'fire' | 'clap';
+  gifUrl?: string;
 }
 
 interface ArrivalOption {
@@ -338,12 +362,56 @@ function TipBubble({ tip }: { tip: { emoji: string; text: string } }) {
   );
 }
 
+// Animated heart reaction component
+function HeartReaction({ show }: { show: boolean }) {
+  if (!show) return null;
+  
+  return (
+    <div className="absolute -bottom-2 -right-1 animate-heart-pop">
+      <div className="w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-lg ring-2 ring-white">
+        <Heart className="w-3.5 h-3.5 text-white fill-white" />
+      </div>
+    </div>
+  );
+}
+
+// GIF message component
+function GifMessage({ url, title }: { url: string; title?: string }) {
+  return (
+    <div className="flex items-end gap-3 animate-message-appear">
+      <EmmaAvatar />
+      <div className="max-w-[75%] rounded-2xl overflow-hidden shadow-lg border-2 border-sand-200">
+        <img 
+          src={url} 
+          alt={title || 'GIF reaction'} 
+          className="w-full h-auto max-h-48 object-cover"
+          loading="lazy"
+        />
+      </div>
+    </div>
+  );
+}
+
 // Message bubble component
 function MessageBubble({ message }: { message: Message }) {
   const isEmma = message.type === 'emma';
   const isUser = message.type === 'user';
   const isCelebration = message.type === 'celebration';
   const isTip = message.type === 'tip';
+  const isGif = message.type === 'gif';
+  const [showReaction, setShowReaction] = useState(false);
+
+  // Animate reaction appearing
+  useEffect(() => {
+    if (message.reaction && isUser) {
+      const timer = setTimeout(() => setShowReaction(true), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [message.reaction, isUser]);
+
+  if (isGif && message.gifUrl) {
+    return <GifMessage url={message.gifUrl} title={message.content} />;
+  }
 
   if (isTip) {
     const tip = TIPS.find(t => message.content.includes(t.text)) || TIPS[0];
@@ -370,32 +438,37 @@ function MessageBubble({ message }: { message: Message }) {
     >
       {isEmma && <EmmaAvatar />}
       
-      <div
-        className={`max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm ${
-          isUser
-            ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
-            : 'bg-white border border-sand-200 rounded-bl-sm'
-        }`}
-      >
-        <p className={`text-[15px] leading-relaxed ${isUser ? 'text-white' : 'text-slate-700'}`}>
-          {message.content}
-        </p>
-        <div className={`flex items-center gap-1 mt-1 ${isUser ? 'justify-end' : ''}`}>
-          <span className={`text-[10px] ${isUser ? 'text-white/70' : 'text-slate-400'}`}>
-            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          {isUser && (
-            <span className="text-white/70">
-              {message.read ? (
-                <CheckCheck className="w-3.5 h-3.5 text-ocean-dark" />
-              ) : message.delivered ? (
-                <CheckCheck className="w-3.5 h-3.5" />
-              ) : (
-                <Check className="w-3.5 h-3.5" />
-              )}
+      <div className="relative">
+        <div
+          className={`max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm ${
+            isUser
+              ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
+              : 'bg-white border border-sand-200 rounded-bl-sm'
+          }`}
+        >
+          <p className={`text-[15px] leading-relaxed ${isUser ? 'text-white' : 'text-slate-700'}`}>
+            {message.content}
+          </p>
+          <div className={`flex items-center gap-1 mt-1 ${isUser ? 'justify-end' : ''}`}>
+            <span className={`text-[10px] ${isUser ? 'text-white/70' : 'text-slate-400'}`}>
+              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
-          )}
+            {isUser && (
+              <span className="text-white/70">
+                {message.read ? (
+                  <CheckCheck className="w-3.5 h-3.5 text-ocean-dark" />
+                ) : message.delivered ? (
+                  <CheckCheck className="w-3.5 h-3.5" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+              </span>
+            )}
+          </div>
         </div>
+        
+        {/* Heart reaction */}
+        <HeartReaction show={showReaction && message.reaction === 'heart'} />
       </div>
     </div>
   );
@@ -799,6 +872,30 @@ export default function EmmaChat() {
   }, [messages, isTyping, scrollToBottom]);
 
   // Handle user input submission
+  // Helper to add a heart reaction to a message
+  const addReactionToMessage = (messageId: string, reaction: 'heart' | 'like' | 'fire' | 'clap') => {
+    setMessages(prev => prev.map(msg => 
+      msg.id === messageId ? { ...msg, reaction } : msg
+    ));
+  };
+
+  // Helper to add a GIF message
+  const addGifMessage = async (gifType: GifType) => {
+    const gif = await getReactionGif(gifType);
+    if (gif) {
+      const gifMessage: Message = {
+        id: `gif-${Date.now()}`,
+        type: 'gif',
+        content: gif.title,
+        gifUrl: gif.url,
+        timestamp: new Date(),
+        animate: true,
+      };
+      setMessages(prev => [...prev, gifMessage]);
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+  };
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || isTyping) return;
@@ -834,16 +931,29 @@ export default function EmmaChat() {
     if (currentStep === 'name') {
       const extractedName = extractName(userInput);
       setUserName(extractedName);
-      await addCelebration(`Nice to meet you, ${extractedName}! 🎉`);
+      
+      // Add heart reaction to their name message
+      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
+      
+      // Show a GIF reaction first
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await addGifMessage('name_reaction');
       
       // Get AI-personalized response to their name
       const aiReaction = await getEmmaAIResponse('name_reaction', { name: extractedName });
-      await addEmmaMessages([`${extractedName}! 💕`, aiReaction]);
+      await addEmmaMessages([aiReaction]);
       
       await new Promise(resolve => setTimeout(resolve, 600));
       await addEmmaMessages([EMMA_MESSAGES.askEmail], 'email');
     } else if (currentStep === 'email') {
       setUserEmail(userInput);
+      
+      // Add heart reaction to their email
+      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
+      
+      // Show a thank you GIF
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await addGifMessage('thank_you');
       
       // Get AI-personalized email thanks
       const aiThanks = await getEmmaAIResponse('email_thanks', { name: userName, email: userInput });
@@ -869,6 +979,13 @@ export default function EmmaChat() {
       read: false,
     }]);
     markAsRead(userMessageId);
+    
+    // Add heart reaction to their selection
+    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
+
+    // Show a travel-themed GIF based on arrival method
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await addGifMessage(arrivalId as GifType);
 
     // Get AI-personalized arrival reaction
     const aiArrivalReaction = await getEmmaAIResponse('arrival_reaction', { 
@@ -876,10 +993,6 @@ export default function EmmaChat() {
       arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' 
     });
     await addEmmaMessages([aiArrivalReaction, EMMA_MESSAGES.askRating], 'rating');
-    
-    // Add a random tip
-    const randomTip = TIPS[Math.floor(Math.random() * TIPS.length)];
-    await addTip(randomTip);
   };
 
   // Handle star rating
@@ -898,7 +1011,13 @@ export default function EmmaChat() {
     }]);
     markAsRead(userMessageId);
 
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Add heart reaction
+    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
+    
+    // Show appropriate GIF based on rating
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
+    await addGifMessage(gifType);
     
     // Get AI-personalized rating reaction
     const aiRatingReaction = await getEmmaAIResponse('rating_reaction', { 
@@ -924,6 +1043,13 @@ export default function EmmaChat() {
       read: false,
     }]);
     markAsRead(userMessageId);
+    
+    // Add heart reaction
+    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
+    
+    // Show activity-themed GIF
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await addGifMessage(activityId as GifType);
 
     // Get AI-personalized activity tip
     const aiActivityTip = await getEmmaAIResponse('activity_tip', { 
@@ -931,9 +1057,12 @@ export default function EmmaChat() {
       activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
       arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
     });
-    await addEmmaMessages([`Great choice, ${userName}! ${option.emoji}`, aiActivityTip]);
+    await addEmmaMessages([aiActivityTip]);
     
     await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // Show farewell GIF
+    await addGifMessage('farewell');
     
     // Get AI farewell
     const aiFarewell = await getEmmaAIResponse('farewell', { 
@@ -941,7 +1070,7 @@ export default function EmmaChat() {
       activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
       arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
     });
-    await addEmmaMessages([aiFarewell, "You're all set! 🎉"], 'complete');
+    await addEmmaMessages([aiFarewell], 'complete');
     
     // Show confetti!
     setShowConfetti(true);

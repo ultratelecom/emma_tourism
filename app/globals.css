@@ -544,6 +544,32 @@ h1, h2, h3, h4, h5, h6 {
   animation: heartbeat 1.5s ease-in-out infinite;
 }
 
+/* Heart pop reaction animation - like iMessage */
+@keyframes heart-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0) rotate(-20deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.4) rotate(10deg);
+  }
+  70% {
+    transform: scale(0.9) rotate(-5deg);
+  }
+  85% {
+    transform: scale(1.1) rotate(3deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.animate-heart-pop {
+  animation: heart-pop 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+}
+
 /* Focus states - better for mobile */
 input:focus {
   outline: none;
