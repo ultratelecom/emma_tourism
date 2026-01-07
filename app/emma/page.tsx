@@ -24,12 +24,24 @@ interface GifData {
   title: string;
 }
 
-// Fetch a GIF reaction
+// Fetch a GIF reaction with timeout
 async function getReactionGif(type: GifType): Promise<GifData | null> {
   try {
-    const response = await fetch(`/api/emma/gif?type=${type}&random=true`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+    
+    const response = await fetch(`/api/emma/gif?type=${type}&random=true`, {
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
     if (!response.ok) return null;
-    return await response.json();
+    
+    const data = await response.json();
+    if (data.error || !data.url) return null;
+    
+    return data;
   } catch (error) {
     console.error('GIF fetch error:', error);
     return null;
@@ -362,30 +374,56 @@ function TipBubble({ tip }: { tip: { emoji: string; text: string } }) {
   );
 }
 
-// Animated heart reaction component
-function HeartReaction({ show }: { show: boolean }) {
+// Animated heart reaction component - positioned on bottom-left of user messages
+function HeartReaction({ show, isUser }: { show: boolean; isUser: boolean }) {
+  const [hasAnimated, setHasAnimated] = useState(false);
+  
+  useEffect(() => {
+    if (show && !hasAnimated) {
+      setHasAnimated(true);
+    }
+  }, [show, hasAnimated]);
+  
   if (!show) return null;
   
   return (
-    <div className="absolute -bottom-2 -right-1 animate-heart-pop">
-      <div className="w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-lg ring-2 ring-white">
-        <Heart className="w-3.5 h-3.5 text-white fill-white" />
+    <div 
+      className={`absolute -bottom-3 ${isUser ? '-left-3' : '-right-3'} animate-heart-pop z-10`}
+    >
+      <div className="w-7 h-7 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg ring-2 ring-white">
+        <Heart className="w-4 h-4 text-white fill-white" />
       </div>
     </div>
   );
 }
 
-// GIF message component
+// GIF message component with loading state
 function GifMessage({ url, title }: { url: string; title?: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+  
+  if (error) return null; // Don't show anything if GIF fails to load
+  
   return (
     <div className="flex items-end gap-3 animate-message-appear">
       <EmmaAvatar />
-      <div className="max-w-[75%] rounded-2xl overflow-hidden shadow-lg border-2 border-sand-200">
+      <div className="max-w-[70%] rounded-2xl overflow-hidden shadow-lg border-2 border-sand-200 bg-sand-100">
+        {!loaded && (
+          <div className="w-48 h-32 flex items-center justify-center">
+            <div className="flex gap-1">
+              <span className="w-2 h-2 bg-coral/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 bg-coral/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 bg-coral/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
         <img 
           src={url} 
           alt={title || 'GIF reaction'} 
-          className="w-full h-auto max-h-48 object-cover"
-          loading="lazy"
+          className={`w-full h-auto max-h-44 object-cover ${loaded ? 'block' : 'hidden'}`}
+          loading="eager"
+          onLoad={() => setLoaded(true)}
+          onError={() => setError(true)}
         />
       </div>
     </div>
@@ -438,9 +476,9 @@ function MessageBubble({ message }: { message: Message }) {
     >
       {isEmma && <EmmaAvatar />}
       
-      <div className="relative">
+      <div className={`relative ${isUser ? 'max-w-[80%]' : 'max-w-[80%]'}`}>
         <div
-          className={`max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm ${
+          className={`rounded-2xl px-4 py-2.5 shadow-sm ${
             isUser
               ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
               : 'bg-white border border-sand-200 rounded-bl-sm'
@@ -467,8 +505,8 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         </div>
         
-        {/* Heart reaction */}
-        <HeartReaction show={showReaction && message.reaction === 'heart'} />
+        {/* Heart reaction - positioned on left for user messages */}
+        {isUser && <HeartReaction show={showReaction && message.reaction === 'heart'} isUser={true} />}
       </div>
     </div>
   );
@@ -807,18 +845,32 @@ export default function EmmaChat() {
   const addEmmaMessages = useCallback(async (contents: string[], nextStep?: SurveyStep) => {
     setIsTyping(true);
     
-    for (let i = 0; i < contents.length; i++) {
+    // Filter out empty or emoji-only messages
+    const validContents = contents.filter(c => {
+      if (!c || c.trim().length === 0) return false;
+      // Skip if it's just 1-2 characters (likely just an emoji)
+      if (c.trim().length <= 2) return false;
+      return true;
+    });
+    
+    if (validContents.length === 0) {
+      setIsTyping(false);
+      if (nextStep) setCurrentStep(nextStep);
+      return;
+    }
+    
+    for (let i = 0; i < validContents.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
       
       setMessages(prev => [...prev, {
         id: `emma-${Date.now()}-${i}`,
         type: 'emma',
-        content: contents[i],
+        content: validContents[i],
         timestamp: new Date(),
         animate: true,
       }]);
       
-      if (i < contents.length - 1) {
+      if (i < validContents.length - 1) {
         setIsTyping(true);
         await new Promise(resolve => setTimeout(resolve, 600));
       }
