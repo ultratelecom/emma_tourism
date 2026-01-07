@@ -841,8 +841,12 @@ export default function EmmaChat() {
     }, 800);
   }, []);
 
-  // Add Emma messages with typing delay
-  const addEmmaMessages = useCallback(async (contents: string[], nextStep?: SurveyStep) => {
+  // Add Emma messages with typing delay - includes GIF when 2+ messages
+  const addEmmaMessages = useCallback(async (
+    contents: string[], 
+    nextStep?: SurveyStep,
+    gifType?: GifType
+  ) => {
     setIsTyping(true);
     
     // Filter out empty or emoji-only messages
@@ -859,6 +863,10 @@ export default function EmmaChat() {
       return;
     }
     
+    // If 2+ messages, insert a GIF after the first message
+    const shouldShowGif = validContents.length >= 2 || gifType;
+    let gifInserted = false;
+    
     for (let i = 0; i < validContents.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
       
@@ -869,6 +877,34 @@ export default function EmmaChat() {
         timestamp: new Date(),
         animate: true,
       }]);
+      
+      // Insert GIF after first message if we have multiple messages
+      if (shouldShowGif && i === 0 && !gifInserted) {
+        gifInserted = true;
+        setIsTyping(true);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Determine GIF type based on context or provided type
+        const gType = gifType || (nextStep === 'name' ? 'welcome' : 
+                                  nextStep === 'email' ? 'excited' :
+                                  nextStep === 'arrival' ? 'travel' :
+                                  nextStep === 'rating' ? 'excited' :
+                                  nextStep === 'activities' ? 'excited' :
+                                  nextStep === 'complete' ? 'farewell' : 'excited');
+        
+        const gif = await getReactionGif(gType);
+        if (gif && gif.url) {
+          setMessages(prev => [...prev, {
+            id: `gif-${Date.now()}`,
+            type: 'gif',
+            content: gif.title || '',
+            gifUrl: gif.url,
+            timestamp: new Date(),
+            animate: true,
+          }]);
+          await new Promise(resolve => setTimeout(resolve, 400));
+        }
+      }
       
       if (i < validContents.length - 1) {
         setIsTyping(true);
@@ -987,29 +1023,21 @@ export default function EmmaChat() {
       // Add heart reaction to their name message
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Show a GIF reaction first
+      // Get AI-personalized response and ask for email together (with GIF)
       await new Promise(resolve => setTimeout(resolve, 800));
-      await addGifMessage('name_reaction');
-      
-      // Get AI-personalized response to their name
       const aiReaction = await getEmmaAIResponse('name_reaction', { name: extractedName });
-      await addEmmaMessages([aiReaction]);
+      await addEmmaMessages([aiReaction, EMMA_MESSAGES.askEmail], 'email', 'name_reaction');
       
-      await new Promise(resolve => setTimeout(resolve, 600));
-      await addEmmaMessages([EMMA_MESSAGES.askEmail], 'email');
     } else if (currentStep === 'email') {
       setUserEmail(userInput);
       
       // Add heart reaction to their email
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Show a thank you GIF
+      // Get AI-personalized email thanks with arrival question (with GIF)
       await new Promise(resolve => setTimeout(resolve, 800));
-      await addGifMessage('thank_you');
-      
-      // Get AI-personalized email thanks
       const aiThanks = await getEmmaAIResponse('email_thanks', { name: userName, email: userInput });
-      await addEmmaMessages([aiThanks], 'arrival');
+      await addEmmaMessages([aiThanks, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you');
     }
   };
 
@@ -1035,16 +1063,13 @@ export default function EmmaChat() {
     // Add heart reaction to their selection
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
 
-    // Show a travel-themed GIF based on arrival method
+    // Get AI-personalized arrival reaction + rating question (with travel GIF)
     await new Promise(resolve => setTimeout(resolve, 700));
-    await addGifMessage(arrivalId as GifType);
-
-    // Get AI-personalized arrival reaction
     const aiArrivalReaction = await getEmmaAIResponse('arrival_reaction', { 
       name: userName, 
       arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' 
     });
-    await addEmmaMessages([aiArrivalReaction, EMMA_MESSAGES.askRating], 'rating');
+    await addEmmaMessages([aiArrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType);
   };
 
   // Handle star rating
@@ -1066,17 +1091,16 @@ export default function EmmaChat() {
     // Add heart reaction
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
-    // Show appropriate GIF based on rating
-    await new Promise(resolve => setTimeout(resolve, 700));
+    // Determine GIF type based on rating
     const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
-    await addGifMessage(gifType);
     
-    // Get AI-personalized rating reaction
+    // Get AI-personalized rating reaction + activities question (with rating GIF)
+    await new Promise(resolve => setTimeout(resolve, 700));
     const aiRatingReaction = await getEmmaAIResponse('rating_reaction', { 
       name: userName, 
       rating 
     });
-    await addEmmaMessages([aiRatingReaction, EMMA_MESSAGES.askActivities], 'activities');
+    await addEmmaMessages([aiRatingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType);
   };
 
   // Handle activity selection
@@ -1099,30 +1123,22 @@ export default function EmmaChat() {
     // Add heart reaction
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
-    // Show activity-themed GIF
+    // Get AI-personalized activity tip + farewell (with activity GIF then farewell GIF)
     await new Promise(resolve => setTimeout(resolve, 700));
-    await addGifMessage(activityId as GifType);
-
-    // Get AI-personalized activity tip
     const aiActivityTip = await getEmmaAIResponse('activity_tip', { 
       name: userName, 
       activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
       arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
     });
-    await addEmmaMessages([aiActivityTip]);
     
-    await new Promise(resolve => setTimeout(resolve, 800));
-    
-    // Show farewell GIF
-    await addGifMessage('farewell');
-    
-    // Get AI farewell
     const aiFarewell = await getEmmaAIResponse('farewell', { 
       name: userName, 
       activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
       arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
     });
-    await addEmmaMessages([aiFarewell], 'complete');
+    
+    // Send activity tip with activity-themed GIF
+    await addEmmaMessages([aiActivityTip, aiFarewell], 'complete', activityId as GifType);
     
     // Show confetti!
     setShowConfetti(true);
