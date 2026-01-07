@@ -3,26 +3,43 @@ import { NextRequest, NextResponse } from 'next/server';
 // GIPHY API key - set in environment variables
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
 
-// Curated search terms for different reaction types
+// Curated search terms - intentional GIFs that SAY something or have clear meaning
 const REACTION_SEARCHES: Record<string, string[]> = {
-  welcome: ['welcome', 'hello wave', 'hey there', 'greetings'],
-  name_reaction: ['impressed', 'nice', 'cool', 'awesome reaction'],
-  thank_you: ['thank you', 'thanks', 'grateful', 'appreciate'],
-  excited: ['excited', 'yay', 'celebration', 'happy dance'],
-  travel: ['travel', 'vacation', 'beach vibes', 'tropical'],
-  plane: ['airplane', 'flying', 'takeoff', 'travel plane'],
-  cruise: ['cruise ship', 'ocean', 'sailing', 'boat wave'],
-  ferry: ['boat', 'ferry', 'sea travel', 'ocean waves'],
-  beach: ['beach', 'relaxing beach', 'tropical paradise', 'ocean waves'],
-  adventure: ['adventure', 'hiking', 'nature', 'exploring'],
-  food: ['delicious food', 'yummy', 'eating', 'tasty'],
-  nightlife: ['party', 'dancing', 'music vibes', 'night out'],
-  photos: ['camera', 'taking photos', 'photography', 'snapshot'],
-  five_stars: ['amazing', 'perfect', 'five stars', 'excellent'],
-  good_rating: ['thumbs up', 'nice', 'good job', 'approval'],
-  okay_rating: ['its okay', 'not bad', 'understanding', 'nodding'],
-  farewell: ['goodbye wave', 'see you', 'bye bye', 'have fun'],
-  heart: ['heart', 'love', 'sending love', 'heart reaction'],
+  // Greetings - GIFs that literally wave or say hello
+  welcome: ['hello wave', 'hi there wave', 'hey wave', 'waving hello'],
+  hey_there: ['hey there', 'hi wave', 'hello friend', 'waving hi'],
+  
+  // Name reactions - cool, impressed, sunglasses, pointing
+  name_reaction: ['cool sunglasses', 'you are awesome', 'finger pointing you', 'impressed nodding', 'thats cool'],
+  cool_name: ['deal with it sunglasses', 'cool guy', 'awesome pointing', 'nice one'],
+  
+  // Thank you - literal thank you GIFs
+  thank_you: ['thank you so much', 'thanks gif', 'thanking you', 'appreciate it'],
+  thanks: ['thanks a lot', 'thank you gif', 'grateful thank'],
+  
+  // Travel arrivals
+  plane: ['airplane landing', 'plane arrival', 'flying in', 'welcome flight'],
+  cruise: ['cruise ship wave', 'ship ahoy', 'sailing in', 'ocean cruise'],
+  ferry: ['boat wave', 'ferry ride', 'boat arrival', 'on the water'],
+  
+  // Activities - expressive GIFs
+  beach: ['beach vibes', 'relaxing beach', 'tropical beach', 'paradise beach'],
+  adventure: ['lets go adventure', 'exploring nature', 'hiking excited', 'adventure time'],
+  food: ['yummy food', 'delicious eating', 'tasty food', 'food lover'],
+  nightlife: ['lets party', 'dancing night', 'party time', 'music vibes'],
+  photos: ['say cheese', 'taking picture', 'camera flash', 'photo time'],
+  
+  // Ratings - reactions
+  five_stars: ['perfect amazing', 'excellent wow', 'thats amazing', 'so good'],
+  good_rating: ['thumbs up nice', 'good job', 'nice one', 'well done'],
+  okay_rating: ['understanding nod', 'i understand', 'got it nod', 'okay sure'],
+  
+  // Farewell
+  farewell: ['have fun wave', 'goodbye wave', 'see you later', 'bye bye wave'],
+  enjoy: ['have a great time', 'enjoy yourself', 'have fun', 'good vibes'],
+  
+  // Generic excitement
+  excited: ['so excited', 'yay celebration', 'happy dance', 'lets go'],
 };
 
 export async function GET(request: NextRequest) {

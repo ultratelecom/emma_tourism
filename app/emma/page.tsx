@@ -153,46 +153,39 @@ function extractName(input: string): string {
 
 // Emma's personality messages
 const EMMA_MESSAGES = {
+  // Shorter, punchier messages - GIFs will do the heavy lifting
   welcome: [
-    "Hey there! 🌴",
-    "I'm Emma, your personal Tobago welcome buddy!",
-    "Welcome to paradise! 🏝️ Before we get started on your amazing island adventure, let's have a quick chat!",
+    "Hey there! 👋",
   ],
-  askName: "What's your name, lovely traveler? ✨",
-  nameResponse: (name: string) => [
-    `${name}! 💕`,
-    "What a beautiful name! So wonderful to meet you!",
-  ],
-  askEmail: "Mind sharing your email? I'll send you some exclusive island tips! 📧✨",
-  invalidEmail: "Oops! 😅 That doesn't look quite right. Can you double-check your email?",
-  emailResponse: "Perfect! Get ready for some tropical goodness in your inbox! 🌺",
-  askArrival: "So tell me... how did you arrive at our beautiful island? 🏝️",
+  intro: "I'm Emma, your Tobago welcome buddy! What's your name?",
+  askName: "What's your name?",
+  nameResponse: (name: string) => `${name}! Love that name! 😎`,
+  askEmail: "Drop your email - I'll send you some island tips! 📧",
+  invalidEmail: "Hmm, that doesn't look right - try again?",
+  emailResponse: "Thanks! Good stuff coming your way! 🌴",
+  askArrival: "How did you get to Tobago?",
   arrivalResponse: (method: string) => {
-    const responses: Record<string, string[]> = {
-      plane: ["Ooh, flying in! ✈️", "I bet that aerial view of our turquoise waters was breathtaking!"],
-      cruise: ["A cruise! How luxurious! 🚢", "There's nothing quite like sailing into Scarborough harbour!"],
-      ferry: ["The ferry experience! ⛴️", "That sea breeze must have been refreshing!"],
+    const responses: Record<string, string> = {
+      plane: "Flying in! That view though! ✈️",
+      cruise: "Cruise life! Welcome to port! 🚢",
+      ferry: "The ferry! That sea breeze! ⛴️",
     };
-    return responses[method] || ["Wonderful! Welcome to Tobago!"];
+    return responses[method] || "Welcome!";
   },
-  askRating: "Quick question! How would you rate your journey getting here? ⭐",
+  askRating: "How was your journey here?",
   ratingResponse: (rating: number) => {
-    if (rating >= 4) {
-      return ["Amazing! So glad you had a smooth journey! 🎉", "That's the Tobago way - good vibes only! ✨"];
-    } else if (rating >= 3) {
-      return ["Thanks for sharing! 🙏", "Well, now the REAL adventure begins! 🌴"];
-    } else {
-      return ["Oh no! Sorry to hear that! 😔", "But don't worry - Tobago is about to make it all better! 💪🌺"];
-    }
+    if (rating >= 4) return "Smooth sailing! 🎉";
+    else if (rating >= 3) return "Now the real fun begins! 🌴";
+    else return "Tobago will make up for it! 💪";
   },
-  askActivities: "What are you MOST excited to experience in Tobago? 🤩",
+  askActivities: "What excites you most about Tobago?",
   activityResponse: (activity: string) => {
-    const responses: Record<string, string[]> = {
-      beach: ["Beach lover! 🏖️", "You're in for a treat - Pigeon Point and Store Bay are absolute paradise!"],
-      adventure: ["An adventurer! 🌴", "The Main Ridge Forest Reserve is calling your name - oldest protected rainforest in the Western Hemisphere!"],
-      food: ["A foodie! 🍽️", "Crab & dumpling, bake & shark, fresh coconut water... your taste buds will thank you!"],
-      nightlife: ["Party time! 🎵", "Buccoo and Crown Point have the best vibes - especially on Sunday School nights!"],
-      photos: ["A photographer! 📸", "Tobago is SO photogenic - every corner is Instagram-worthy!"],
+    const responses: Record<string, string> = {
+      beach: "Beach lover! Try Pigeon Point! 🏖️",
+      adventure: "Adventurer! Hit the Main Ridge! 🌴",
+      food: "Foodie! Get the crab & dumpling! 🍽️",
+      nightlife: "Party time! Buccoo Sunday School! 🎵",
+      photos: "Photographer! Every corner is a shot! 📸",
     };
     return responses[activity] || ["Great choice! You're going to have an amazing time!"];
   },
@@ -845,17 +838,35 @@ export default function EmmaChat() {
   const addEmmaMessages = useCallback(async (
     contents: string[], 
     nextStep?: SurveyStep,
-    gifType?: GifType
+    gifType?: GifType,
+    gifFirst?: boolean // If true, show GIF before text messages
   ) => {
     setIsTyping(true);
     
     // Filter out empty or emoji-only messages
     const validContents = contents.filter(c => {
       if (!c || c.trim().length === 0) return false;
-      // Skip if it's just 1-2 characters (likely just an emoji)
       if (c.trim().length <= 2) return false;
       return true;
     });
+    
+    // If GIF first, show the GIF before any text
+    if (gifFirst && gifType) {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      const gif = await getReactionGif(gifType);
+      if (gif && gif.url) {
+        setMessages(prev => [...prev, {
+          id: `gif-${Date.now()}`,
+          type: 'gif',
+          content: gif.title || '',
+          gifUrl: gif.url,
+          timestamp: new Date(),
+          animate: true,
+        }]);
+        setIsTyping(true);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
     
     if (validContents.length === 0) {
       setIsTyping(false);
@@ -863,12 +874,9 @@ export default function EmmaChat() {
       return;
     }
     
-    // If 2+ messages, insert a GIF after the first message
-    const shouldShowGif = validContents.length >= 2 || gifType;
-    let gifInserted = false;
-    
+    // Show text messages
     for (let i = 0; i < validContents.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
+      await new Promise(resolve => setTimeout(resolve, 700 + Math.random() * 300));
       
       setMessages(prev => [...prev, {
         id: `emma-${Date.now()}-${i}`,
@@ -878,22 +886,11 @@ export default function EmmaChat() {
         animate: true,
       }]);
       
-      // Insert GIF after first message if we have multiple messages
-      if (shouldShowGif && i === 0 && !gifInserted) {
-        gifInserted = true;
+      // If NOT gifFirst and we have 2+ messages, insert GIF after first message
+      if (!gifFirst && gifType && i === 0 && validContents.length >= 2) {
         setIsTyping(true);
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Determine GIF type based on context or provided type
-        const gType = gifType || (nextStep === 'name' ? 'welcome' : 
-                                  nextStep === 'email' ? 'excited' :
-                                  nextStep === 'arrival' ? 'travel' :
-                                  nextStep === 'rating' ? 'excited' :
-                                  nextStep === 'activities' ? 'excited' :
-                                  nextStep === 'complete' ? 'farewell' : 'excited');
-        
-        const gif = await getReactionGif(gType);
-        
+        const gif = await getReactionGif(gifType);
         if (gif && gif.url) {
           setMessages(prev => [...prev, {
             id: `gif-${Date.now()}`,
@@ -909,7 +906,7 @@ export default function EmmaChat() {
       
       if (i < validContents.length - 1) {
         setIsTyping(true);
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
     
@@ -950,9 +947,8 @@ export default function EmmaChat() {
   const startChat = useCallback(async () => {
     setCurrentStep('welcome');
     await new Promise(resolve => setTimeout(resolve, 300));
-    await addEmmaMessages(EMMA_MESSAGES.welcome);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    await addEmmaMessages([EMMA_MESSAGES.askName], 'name');
+    // GIF first (waving hello), then intro message
+    await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
   }, [addEmmaMessages]);
 
   // Scroll on new messages
@@ -1024,10 +1020,10 @@ export default function EmmaChat() {
       // Add heart reaction to their name message
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Get AI-personalized response and ask for email together (with GIF)
-      await new Promise(resolve => setTimeout(resolve, 800));
-      const aiReaction = await getEmmaAIResponse('name_reaction', { name: extractedName });
-      await addEmmaMessages([aiReaction, EMMA_MESSAGES.askEmail], 'email', 'name_reaction');
+      // Show "cool" GIF first, then short reaction + ask email
+      await new Promise(resolve => setTimeout(resolve, 600));
+      const nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
+      await addEmmaMessages([nameReaction, EMMA_MESSAGES.askEmail], 'email', 'cool_name', true);
       
     } else if (currentStep === 'email') {
       setUserEmail(userInput);
@@ -1035,10 +1031,9 @@ export default function EmmaChat() {
       // Add heart reaction to their email
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Get AI-personalized email thanks with arrival question (with GIF)
-      await new Promise(resolve => setTimeout(resolve, 800));
-      const aiThanks = await getEmmaAIResponse('email_thanks', { name: userName, email: userInput });
-      await addEmmaMessages([aiThanks, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you');
+      // Show "thank you" GIF first, then short thanks + ask arrival
+      await new Promise(resolve => setTimeout(resolve, 600));
+      await addEmmaMessages([EMMA_MESSAGES.emailResponse, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you', true);
     }
   };
 
@@ -1061,16 +1056,13 @@ export default function EmmaChat() {
     }]);
     markAsRead(userMessageId);
     
-    // Add heart reaction to their selection
+    // Add heart reaction
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
 
-    // Get AI-personalized arrival reaction + rating question (with travel GIF)
-    await new Promise(resolve => setTimeout(resolve, 700));
-    const aiArrivalReaction = await getEmmaAIResponse('arrival_reaction', { 
-      name: userName, 
-      arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' 
-    });
-    await addEmmaMessages([aiArrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType);
+    // Show GIF for arrival method first, then short reaction + rating question
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
+    await addEmmaMessages([arrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType, true);
   };
 
   // Handle star rating
@@ -1095,13 +1087,10 @@ export default function EmmaChat() {
     // Determine GIF type based on rating
     const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
     
-    // Get AI-personalized rating reaction + activities question (with rating GIF)
-    await new Promise(resolve => setTimeout(resolve, 700));
-    const aiRatingReaction = await getEmmaAIResponse('rating_reaction', { 
-      name: userName, 
-      rating 
-    });
-    await addEmmaMessages([aiRatingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType);
+    // Show rating GIF first, then short reaction + activities question
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
+    await addEmmaMessages([ratingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType, true);
   };
 
   // Handle activity selection
@@ -1124,22 +1113,10 @@ export default function EmmaChat() {
     // Add heart reaction
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
-    // Get AI-personalized activity tip + farewell (with activity GIF then farewell GIF)
-    await new Promise(resolve => setTimeout(resolve, 700));
-    const aiActivityTip = await getEmmaAIResponse('activity_tip', { 
-      name: userName, 
-      activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
-      arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
-    });
-    
-    const aiFarewell = await getEmmaAIResponse('farewell', { 
-      name: userName, 
-      activity: activityId as 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos',
-      arrivalMethod: userArrival as 'plane' | 'cruise' | 'ferry'
-    });
-    
-    // Send activity tip with activity-themed GIF
-    await addEmmaMessages([aiActivityTip, aiFarewell], 'complete', activityId as GifType);
+    // Show activity GIF first, then short tip + farewell
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const activityReaction = EMMA_MESSAGES.activityResponse(activityId);
+    await addEmmaMessages([activityReaction, `Have an amazing time, ${userName}! 🌴`], 'complete', activityId as GifType, true);
     
     // Show confetti!
     setShowConfetti(true);
