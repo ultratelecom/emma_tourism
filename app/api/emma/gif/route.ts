@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// GIPHY API - using the public beta key for now
-// For production, get your own key at https://developers.giphy.com/
-const GIPHY_API_KEY = process.env.GIPHY_API_KEY || 'dc6zaTOxFJmzC'; // Public beta key
+// GIPHY API key - set in environment variables
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
+
+if (!GIPHY_API_KEY) {
+  console.error('GIPHY_API_KEY not set in environment variables');
+}
 
 // Curated search terms for different reaction types
 const REACTION_SEARCHES: Record<string, string[]> = {
@@ -28,6 +31,12 @@ const REACTION_SEARCHES: Record<string, string[]> = {
 
 export async function GET(request: NextRequest) {
   try {
+    // Check if API key is configured
+    if (!GIPHY_API_KEY) {
+      console.error('GIPHY_API_KEY not configured');
+      return NextResponse.json({ error: 'GIPHY API key not configured' }, { status: 500 });
+    }
+    
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || 'excited';
     const random = searchParams.get('random') === 'true';
@@ -37,6 +46,8 @@ export async function GET(request: NextRequest) {
     const searchTerm = random 
       ? searches[Math.floor(Math.random() * searches.length)]
       : searches[0];
+
+    console.log('Fetching GIF for:', searchTerm, 'type:', type);
 
     // Fetch from GIPHY
     const response = await fetch(

@@ -26,6 +26,7 @@ interface GifData {
 
 // Fetch a GIF reaction with timeout
 async function getReactionGif(type: GifType): Promise<GifData | null> {
+  console.log('Fetching GIF for type:', type);
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
@@ -36,10 +37,18 @@ async function getReactionGif(type: GifType): Promise<GifData | null> {
     
     clearTimeout(timeoutId);
     
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error('GIF API response not ok:', response.status);
+      return null;
+    }
     
     const data = await response.json();
-    if (data.error || !data.url) return null;
+    console.log('GIF API response:', data);
+    
+    if (data.error || !data.url) {
+      console.error('GIF API returned error or no URL:', data);
+      return null;
+    }
     
     return data;
   } catch (error) {
@@ -402,7 +411,15 @@ function GifMessage({ url, title }: { url: string; title?: string }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   
-  if (error) return null; // Don't show anything if GIF fails to load
+  // Debug log
+  useEffect(() => {
+    console.log('GifMessage rendering with URL:', url);
+  }, [url]);
+  
+  if (error) {
+    console.log('GIF failed to load:', url);
+    return null;
+  }
   
   return (
     <div className="flex items-end gap-3 animate-message-appear">
@@ -422,8 +439,15 @@ function GifMessage({ url, title }: { url: string; title?: string }) {
           alt={title || 'GIF reaction'} 
           className={`w-full h-auto max-h-44 object-cover ${loaded ? 'block' : 'hidden'}`}
           loading="eager"
-          onLoad={() => setLoaded(true)}
-          onError={() => setError(true)}
+          crossOrigin="anonymous"
+          onLoad={() => {
+            console.log('GIF loaded successfully:', url);
+            setLoaded(true);
+          }}
+          onError={(e) => {
+            console.error('GIF load error:', url, e);
+            setError(true);
+          }}
         />
       </div>
     </div>
@@ -892,8 +916,12 @@ export default function EmmaChat() {
                                   nextStep === 'activities' ? 'excited' :
                                   nextStep === 'complete' ? 'farewell' : 'excited');
         
+        console.log('Attempting to fetch GIF with type:', gType);
         const gif = await getReactionGif(gType);
+        console.log('GIF fetch result:', gif);
+        
         if (gif && gif.url) {
+          console.log('Adding GIF message with URL:', gif.url);
           setMessages(prev => [...prev, {
             id: `gif-${Date.now()}`,
             type: 'gif',
@@ -903,6 +931,8 @@ export default function EmmaChat() {
             animate: true,
           }]);
           await new Promise(resolve => setTimeout(resolve, 400));
+        } else {
+          console.log('No GIF to show - gif was null or had no URL');
         }
       }
       
