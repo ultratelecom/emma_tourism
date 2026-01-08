@@ -366,7 +366,7 @@ function TipBubble({ tip }: { tip: { emoji: string; text: string } }) {
   );
 }
 
-// Animated heart reaction component - positioned on bottom-left of user messages
+// Animated heart reaction component - positioned on TOP-LEFT of user messages
 function HeartReaction({ show, isUser }: { show: boolean; isUser: boolean }) {
   const [hasAnimated, setHasAnimated] = useState(false);
   
@@ -380,10 +380,10 @@ function HeartReaction({ show, isUser }: { show: boolean; isUser: boolean }) {
   
   return (
     <div 
-      className={`absolute -bottom-3 ${isUser ? '-left-3' : '-right-3'} animate-heart-pop z-10`}
+      className={`absolute -top-2 ${isUser ? '-left-2' : '-right-2'} animate-heart-pop z-10`}
     >
-      <div className="w-7 h-7 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg ring-2 ring-white">
-        <Heart className="w-4 h-4 text-white fill-white" />
+      <div className="w-6 h-6 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center shadow-md ring-2 ring-white">
+        <Heart className="w-3.5 h-3.5 text-white fill-white" />
       </div>
     </div>
   );
@@ -469,19 +469,25 @@ function MessageBubble({ message }: { message: Message }) {
     >
       {isEmma && <EmmaAvatar size="sm" />}
       
-      <div className={`relative flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-        {/* Message bubble - compact, no timestamp inside */}
-        <div
-          className={`rounded-2xl px-3.5 py-2 shadow-sm ${
-            isUser
-              ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
-              : 'bg-white border border-sand-200 rounded-bl-sm'
-          }`}
-          style={{ maxWidth: '75vw' }}
-        >
-          <p className={`text-[15px] leading-snug ${isUser ? 'text-white' : 'text-slate-700'}`}>
-            {message.content}
-          </p>
+      <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+        {/* Message bubble wrapper - relative for heart positioning */}
+        <div className="relative">
+          {/* Heart reaction - TOP LEFT of bubble */}
+          {isUser && <HeartReaction show={showReaction && message.reaction === 'heart'} isUser={true} />}
+          
+          {/* Message bubble */}
+          <div
+            className={`rounded-2xl px-3.5 py-2 shadow-sm ${
+              isUser
+                ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
+                : 'bg-white border border-sand-200 rounded-bl-sm'
+            }`}
+            style={{ maxWidth: '75vw' }}
+          >
+            <p className={`text-[15px] leading-snug ${isUser ? 'text-white' : 'text-slate-700'}`}>
+              {message.content}
+            </p>
+          </div>
         </div>
         
         {/* Timestamp + read receipts - OUTSIDE bubble, small and subtle */}
@@ -501,9 +507,6 @@ function MessageBubble({ message }: { message: Message }) {
             </span>
           )}
         </div>
-        
-        {/* Heart reaction */}
-        {isUser && <HeartReaction show={showReaction && message.reaction === 'heart'} isUser={true} />}
       </div>
     </div>
   );
