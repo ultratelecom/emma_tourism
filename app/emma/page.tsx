@@ -397,9 +397,9 @@ function GifMessage({ url, title }: { url: string; title?: string }) {
   if (error) return null;
   
   return (
-    <div className="flex items-end gap-3 animate-message-appear">
-      <EmmaAvatar />
-      <div className="max-w-[70%] rounded-2xl overflow-hidden shadow-lg border-2 border-sand-200 bg-sand-100">
+    <div className="flex items-end gap-2 animate-message-appear">
+      <EmmaAvatar size="sm" />
+      <div className="max-w-[65%] rounded-2xl overflow-hidden shadow-md border border-sand-200 bg-sand-100">
         {!loaded && (
           <div className="w-48 h-32 flex items-center justify-center">
             <div className="flex gap-1">
@@ -463,42 +463,46 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <div
-      className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''} ${
+      className={`flex items-end gap-2 ${isUser ? 'flex-row-reverse' : ''} ${
         message.animate ? 'animate-message-appear' : ''
       }`}
     >
-      {isEmma && <EmmaAvatar />}
+      {isEmma && <EmmaAvatar size="sm" />}
       
-      <div className={`relative ${isUser ? 'max-w-[80%]' : 'max-w-[80%]'}`}>
+      <div className={`relative flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+        {/* Message bubble - compact, no timestamp inside */}
         <div
-          className={`rounded-2xl px-4 py-2.5 shadow-sm ${
+          className={`rounded-2xl px-3.5 py-2 shadow-sm ${
             isUser
               ? 'bg-gradient-to-r from-ocean to-ocean-dark text-white rounded-br-sm'
               : 'bg-white border border-sand-200 rounded-bl-sm'
           }`}
+          style={{ maxWidth: '75vw' }}
         >
-          <p className={`text-[15px] leading-relaxed ${isUser ? 'text-white' : 'text-slate-700'}`}>
+          <p className={`text-[15px] leading-snug ${isUser ? 'text-white' : 'text-slate-700'}`}>
             {message.content}
           </p>
-          <div className={`flex items-center gap-1 mt-1 ${isUser ? 'justify-end' : ''}`}>
-            <span className={`text-[10px] ${isUser ? 'text-white/70' : 'text-slate-400'}`}>
-              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </span>
-            {isUser && (
-              <span className="text-white/70">
-                {message.read ? (
-                  <CheckCheck className="w-3.5 h-3.5 text-ocean-dark" />
-                ) : message.delivered ? (
-                  <CheckCheck className="w-3.5 h-3.5" />
-                ) : (
-                  <Check className="w-3.5 h-3.5" />
-                )}
-              </span>
-            )}
-          </div>
         </div>
         
-        {/* Heart reaction - positioned on left for user messages */}
+        {/* Timestamp + read receipts - OUTSIDE bubble, small and subtle */}
+        <div className={`flex items-center gap-1 mt-0.5 px-1 ${isUser ? 'flex-row-reverse' : ''}`}>
+          <span className="text-[10px] text-slate-400">
+            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          {isUser && (
+            <span className="text-slate-400">
+              {message.read ? (
+                <CheckCheck className="w-3 h-3 text-ocean" />
+              ) : message.delivered ? (
+                <CheckCheck className="w-3 h-3" />
+              ) : (
+                <Check className="w-3 h-3" />
+              )}
+            </span>
+          )}
+        </div>
+        
+        {/* Heart reaction */}
         {isUser && <HeartReaction show={showReaction && message.reaction === 'heart'} isUser={true} />}
       </div>
     </div>
