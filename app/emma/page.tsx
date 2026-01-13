@@ -219,7 +219,15 @@ async function identifyUser(fingerprint: string, email?: string, name?: string):
     
     if (!response.ok) throw new Error('User identification failed');
     
-    return await response.json();
+    const data = await response.json();
+    
+    // Map snake_case API response to camelCase frontend
+    return {
+      user: data.user,
+      isReturningUser: data.is_returning_user || false,
+      isReturningDevice: data.is_returning_device || false,
+      context: data.context,
+    };
   } catch (error) {
     console.error('User identification error:', error);
     return { user: null, isReturningUser: false, isReturningDevice: false };
