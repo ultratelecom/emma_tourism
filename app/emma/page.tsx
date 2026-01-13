@@ -1,10 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle } from 'lucide-react';
+import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle, RefreshCcw, MessageCircle, MapPin, HelpCircle } from 'lucide-react';
 
-// AI Response helper - fetches personalized responses from Emma
-type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell';
+// ============================================
+// TYPES & INTERFACES
+// ============================================
+
+type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back';
+type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'cool_name' | 'thank_you' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back';
+type SurveyStep = 'splash' | 'loading' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
 
 interface AIContext {
   name?: string;
@@ -12,10 +17,10 @@ interface AIContext {
   arrivalMethod?: 'plane' | 'cruise' | 'ferry';
   rating?: number;
   activity?: 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos';
+  isReturningUser?: boolean;
+  visitCount?: number;
+  lastRating?: { place: string; rating: number };
 }
-
-// GIF types matching our API
-type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'cool_name' | 'thank_you' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy';
 
 interface GifData {
   url: string;
@@ -24,7 +29,127 @@ interface GifData {
   title: string;
 }
 
-// Fetch a GIF reaction with timeout
+interface Message {
+  id: string;
+  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip' | 'gif';
+  content: string;
+  timestamp: Date;
+  animate?: boolean;
+  delivered?: boolean;
+  read?: boolean;
+  reaction?: 'heart' | 'like' | 'fire' | 'clap';
+  gifUrl?: string;
+}
+
+interface ArrivalOption {
+  id: string;
+  label: string;
+  emoji: string;
+}
+
+interface ActivityOption {
+  id: string;
+  label: string;
+  emoji: string;
+  icon: React.ReactNode;
+}
+
+interface UserData {
+  id: string;
+  name: string;
+  email: string;
+  visit_count: number;
+  last_seen_at: Date;
+  arrival_method?: string;
+  personality_tags?: string[];
+}
+
+interface MainMenuOption {
+  id: string;
+  label: string;
+  emoji: string;
+  description: string;
+}
+
+// ============================================
+// CONSTANTS
+// ============================================
+
+const ARRIVAL_OPTIONS: ArrivalOption[] = [
+  { id: 'plane', label: 'By Plane', emoji: '✈️' },
+  { id: 'cruise', label: 'Cruise Ship', emoji: '🚢' },
+  { id: 'ferry', label: 'By Ferry', emoji: '⛴️' },
+];
+
+const ACTIVITY_OPTIONS: ActivityOption[] = [
+  { id: 'beach', label: 'Beach & Relaxation', emoji: '🏖️', icon: <Umbrella className="w-5 h-5" /> },
+  { id: 'adventure', label: 'Adventure & Nature', emoji: '🌴', icon: <TreePalm className="w-5 h-5" /> },
+  { id: 'food', label: 'Local Food & Culture', emoji: '🍽️', icon: <Utensils className="w-5 h-5" /> },
+  { id: 'nightlife', label: 'Music & Nightlife', emoji: '🎵', icon: <Music className="w-5 h-5" /> },
+  { id: 'photos', label: 'Sightseeing & Photos', emoji: '📸', icon: <Camera className="w-5 h-5" /> },
+];
+
+const MAIN_MENU_OPTIONS: MainMenuOption[] = [
+  { id: 'rate', label: 'Rate a Spot', emoji: '⭐', description: 'Share your experience' },
+  { id: 'recommend', label: 'Get Recommendations', emoji: '🗺️', description: 'What should I do?' },
+  { id: 'chat', label: 'Just Chat', emoji: '💬', description: 'Talk to me!' },
+  { id: 'help', label: 'Need Help?', emoji: '🆘', description: 'I\'m here for you' },
+];
+
+const TIPS = [
+  { emoji: '🥥', text: 'Try fresh coconut water from a street vendor!' },
+  { emoji: '🐢', text: 'Visit Turtle Beach to see leatherback turtles!' },
+  { emoji: '🌅', text: 'Pigeon Point has the most stunning sunsets!' },
+  { emoji: '🎶', text: "Don't miss Sunday School in Buccoo!" },
+];
+
+// Emma avatar URL
+const EMMA_AVATAR_URL = 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=200&h=200&fit=crop&crop=face';
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function isValidEmail(email: string): boolean {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+function extractName(input: string): string {
+  const patterns = [
+    /(?:my name is|i'm|i am|it's|its|call me|they call me|people call me|you can call me)\s+(.+)/i,
+    /^(?:hi,?\s*)?(?:i'm|i am)\s+(.+)/i,
+    /^(.+?)(?:\s+here|\s+speaking)?$/i,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    if (match && match[1]) {
+      let name = match[1].trim();
+      name = name.replace(/[.,!?]+$/, '').trim();
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+  }
+  
+  return input.trim().charAt(0).toUpperCase() + input.trim().slice(1);
+}
+
+function getRelativeTime(date: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - new Date(date).getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  
+  if (days === 0) return 'earlier today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+  return `${Math.floor(days / 30)} months ago`;
+}
+
+// ============================================
+// API FUNCTIONS
+// ============================================
+
 async function getReactionGif(type: GifType): Promise<GifData | null> {
   try {
     const controller = new AbortController();
@@ -61,7 +186,6 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
     return data.response;
   } catch (error) {
     console.error('AI response error:', error);
-    // Fallback responses - simple and human
     const fallbacks: Record<AIResponseType, string> = {
       name_reaction: `Nice to meet you, ${context.name}!`,
       email_thanks: "Got it, thanks!",
@@ -69,96 +193,196 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
       rating_reaction: "Thanks for sharing! Tobago is about to amaze you! 🌴",
       activity_tip: "You're going to love exploring our beautiful island!",
       farewell: "Have the most incredible time in Tobago! 🌺",
+      welcome_back: `${context.name}! So good to see you again! 🌴`,
     };
     return fallbacks[type];
   }
 }
 
-// Survey steps
-type SurveyStep = 'splash' | 'welcome' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete';
-
-interface Message {
-  id: string;
-  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip' | 'gif';
-  content: string;
-  timestamp: Date;
-  animate?: boolean;
-  delivered?: boolean;
-  read?: boolean;
-  reaction?: 'heart' | 'like' | 'fire' | 'clap';
-  gifUrl?: string;
+async function identifyUser(fingerprint: string, email?: string, name?: string): Promise<{
+  user: UserData | null;
+  isReturningUser: boolean;
+  isReturningDevice: boolean;
+  context?: string;
+}> {
+  try {
+    const response = await fetch('/api/emma/user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        browser_fingerprint: fingerprint,
+        email,
+        name,
+        user_agent: navigator.userAgent,
+      }),
+    });
+    
+    if (!response.ok) throw new Error('User identification failed');
+    
+    return await response.json();
+  } catch (error) {
+    console.error('User identification error:', error);
+    return { user: null, isReturningUser: false, isReturningDevice: false };
+  }
 }
 
-interface ArrivalOption {
-  id: string;
-  label: string;
-  emoji: string;
+async function createConversation(sessionToken: string, userId?: string): Promise<void> {
+  try {
+    await fetch('/api/emma/conversation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create',
+        session_token: sessionToken,
+        user_id: userId,
+      }),
+    });
+  } catch (error) {
+    console.error('Create conversation error:', error);
+  }
 }
 
-interface ActivityOption {
-  id: string;
-  label: string;
-  emoji: string;
-  icon: React.ReactNode;
+async function saveMessageToDb(sessionToken: string, sender: 'user' | 'emma', content: string, options?: Record<string, unknown>): Promise<void> {
+  try {
+    await fetch('/api/emma/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_token: sessionToken,
+        sender,
+        content,
+        ...options,
+      }),
+    });
+  } catch (error) {
+    console.error('Save message error:', error);
+  }
 }
 
-const ARRIVAL_OPTIONS: ArrivalOption[] = [
-  { id: 'plane', label: 'By Plane', emoji: '✈️' },
-  { id: 'cruise', label: 'Cruise Ship', emoji: '🚢' },
-  { id: 'ferry', label: 'By Ferry', emoji: '⛴️' },
-];
-
-const ACTIVITY_OPTIONS: ActivityOption[] = [
-  { id: 'beach', label: 'Beach & Relaxation', emoji: '🏖️', icon: <Umbrella className="w-5 h-5" /> },
-  { id: 'adventure', label: 'Adventure & Nature', emoji: '🌴', icon: <TreePalm className="w-5 h-5" /> },
-  { id: 'food', label: 'Local Food & Culture', emoji: '🍽️', icon: <Utensils className="w-5 h-5" /> },
-  { id: 'nightlife', label: 'Music & Nightlife', emoji: '🎵', icon: <Music className="w-5 h-5" /> },
-  { id: 'photos', label: 'Sightseeing & Photos', emoji: '📸', icon: <Camera className="w-5 h-5" /> },
-];
-
-const TIPS = [
-  { emoji: '🥥', text: 'Try fresh coconut water from a street vendor!' },
-  { emoji: '🐢', text: 'Visit Turtle Beach to see leatherback turtles!' },
-  { emoji: '🌅', text: 'Pigeon Point has the most stunning sunsets!' },
-  { emoji: '🎶', text: "Don't miss Sunday School in Buccoo!" },
-];
-
-// Email validation
-function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
+async function saveMemory(userId: string, data: Record<string, unknown>): Promise<void> {
+  try {
+    await fetch('/api/emma/memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, ...data }),
+    });
+  } catch (error) {
+    console.error('Save memory error:', error);
+  }
 }
 
-// Extract name from various formats
-function extractName(input: string): string {
-  const lowered = input.toLowerCase().trim();
+// ============================================
+// BROWSER FINGERPRINT
+// ============================================
+
+async function generateBrowserFingerprint(): Promise<string> {
+  if (typeof window === 'undefined') return 'server-side';
+
+  const components: string[] = [];
+
+  components.push(`${screen.width}x${screen.height}`);
+  components.push(`${screen.colorDepth}`);
+  components.push(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  components.push(navigator.language);
+  components.push(navigator.platform);
+  components.push(String(navigator.hardwareConcurrency || 0));
+
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#f60';
+      ctx.fillRect(125, 1, 62, 20);
+      ctx.fillStyle = '#069';
+      ctx.fillText('Emma Tobago 🌴', 2, 15);
+      components.push(canvas.toDataURL().slice(-50));
+    }
+  } catch {
+    components.push('canvas-unavailable');
+  }
+
+  const str = components.join('|||');
   
-  const patterns = [
-    /(?:my name is|i'm|i am|it's|its|call me|they call me|people call me|you can call me)\s+(.+)/i,
-    /^(?:hi,?\s*)?(?:i'm|i am)\s+(.+)/i,
-    /^(.+?)(?:\s+here|\s+speaking)?$/i,
-  ];
-  
-  for (const pattern of patterns) {
-    const match = input.match(pattern);
-    if (match && match[1]) {
-      let name = match[1].trim();
-      name = name.replace(/[.,!?]+$/, '').trim();
-      return name.charAt(0).toUpperCase() + name.slice(1);
+  if (window.crypto?.subtle) {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(str);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+      // Fall through to simple hash
     }
   }
   
-  return input.trim().charAt(0).toUpperCase() + input.trim().slice(1);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16).padStart(16, '0');
 }
 
-// Emma's personality messages
+function getStoredFingerprint(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('emma_browser_fp');
+  } catch {
+    return null;
+  }
+}
+
+function storeFingerprint(fp: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('emma_browser_fp', fp);
+  } catch {
+    // Ignore
+  }
+}
+
+function getStoredUserId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('emma_user_id');
+  } catch {
+    return null;
+  }
+}
+
+function storeUserId(userId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('emma_user_id', userId);
+  } catch {
+    // Ignore
+  }
+}
+
+function getSessionToken(): string {
+  if (typeof window === 'undefined') return crypto.randomUUID();
+  try {
+    let token = sessionStorage.getItem('emma_session_token');
+    if (!token) {
+      token = crypto.randomUUID();
+      sessionStorage.setItem('emma_session_token', token);
+    }
+    return token;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+// ============================================
+// EMMA'S MESSAGES
+// ============================================
+
 const EMMA_MESSAGES = {
-  // Shorter, punchier messages - GIFs will do the heavy lifting
-  welcome: [
-    "Hey there! 👋",
-  ],
+  welcome: ["Hey there! 👋"],
   intro: "I'm Emma, your Tobago welcome buddy! What's your name?",
-  askName: "What's your name?",
   nameResponse: (name: string) => `${name}! Love that name! 😎`,
   askEmail: "Drop your email - I'll send you some island tips! 📧",
   invalidEmail: "Hmm, that doesn't look right - try again?",
@@ -189,14 +413,27 @@ const EMMA_MESSAGES = {
     };
     return responses[activity] || "Great choice! Have an amazing time!";
   },
-  complete: [
-    "You're officially ready for Tobago! 🎊",
-    "I hope you have the most INCREDIBLE time here!",
-    "Remember: Lime slow, enjoy the journey, and soak up every moment! 🌅",
-  ],
+  welcomeBack: (name: string, visitCount: number, lastSeen: Date) => {
+    const timeAgo = getRelativeTime(lastSeen);
+    if (visitCount === 2) {
+      return `${name}! You came back! 🎉`;
+    } else if (visitCount <= 5) {
+      return `${name}! Visit #${visitCount}! You must love it here! 💕`;
+    } else {
+      return `${name}! My favorite regular! Welcome back! 🌟`;
+    }
+  },
+  welcomeBackFollowUp: (lastSeen: Date) => {
+    const timeAgo = getRelativeTime(lastSeen);
+    return `Last time we chatted was ${timeAgo}. How's Tobago treating you?`;
+  },
+  mainMenuPrompt: "What brings you here today?",
 };
 
-// Splash screen component
+// ============================================
+// COMPONENTS
+// ============================================
+
 function SplashScreen({ onComplete }: { onComplete: () => void }) {
   useEffect(() => {
     const timer = setTimeout(onComplete, 2500);
@@ -205,7 +442,6 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-coral via-sunset to-palm overflow-hidden">
-      {/* Animated background elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         {['🌴', '🌺', '🐚', '🦜', '🥥', '🌊', '☀️', '🏝️'].map((emoji, i) => (
           <span
@@ -222,7 +458,6 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
         ))}
       </div>
       
-      {/* Main content */}
       <div className="relative z-10 flex flex-col items-center animate-scale-in">
         <div className="w-28 h-28 rounded-full bg-white/20 backdrop-blur-sm p-1 mb-6 animate-pulse-glow shadow-2xl">
           <div className="w-full h-full rounded-full overflow-hidden ring-4 ring-white/50">
@@ -257,7 +492,6 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
         </div>
       </div>
       
-      {/* Wave decoration at bottom */}
       <div className="absolute bottom-0 left-0 right-0 h-32">
         <svg viewBox="0 0 1440 120" className="w-full h-full" preserveAspectRatio="none">
           <path
@@ -271,7 +505,28 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-// Confetti component
+function LoadingScreen() {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-sand-50 via-white to-sand-100">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-16 h-16 rounded-full overflow-hidden ring-4 ring-coral/30 animate-pulse">
+          <img 
+            src={EMMA_AVATAR_URL}
+            alt="Emma"
+            className="w-full h-full object-cover"
+          />
+        </div>
+        <div className="flex gap-1.5">
+          <span className="w-2 h-2 bg-coral rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <span className="w-2 h-2 bg-sunset rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <span className="w-2 h-2 bg-palm rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+        <p className="text-sm text-slate-500">Checking if we've met...</p>
+      </div>
+    </div>
+  );
+}
+
 function Confetti() {
   const confettiPieces = Array.from({ length: 50 }, (_, i) => ({
     id: i,
@@ -301,10 +556,6 @@ function Confetti() {
   );
 }
 
-// Emma avatar component - Uses AI-generated Black female avatar
-// Replace this URL with your own AI-generated avatar at public/emma-avatar.png
-const EMMA_AVATAR_URL = 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=200&h=200&fit=crop&crop=face';
-
 function EmmaAvatar({ pulse = false, size = 'md' }: { pulse?: boolean; size?: 'sm' | 'md' | 'lg' }) {
   const sizeClasses = {
     sm: 'w-8 h-8',
@@ -326,7 +577,6 @@ function EmmaAvatar({ pulse = false, size = 'md' }: { pulse?: boolean; size?: 's
           alt="Emma - Your Tobago Welcome Buddy"
           className="w-full h-full object-cover"
           onError={(e) => {
-            // Fallback to gradient with emoji if image fails to load
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
             target.parentElement!.innerHTML = `<div class="w-full h-full bg-gradient-to-br from-coral via-sunset to-palm flex items-center justify-center"><span class="${size === 'lg' ? 'text-2xl' : 'text-lg'}">🌺</span></div>`;
@@ -338,7 +588,6 @@ function EmmaAvatar({ pulse = false, size = 'md' }: { pulse?: boolean; size?: 's
   );
 }
 
-// Typing indicator
 function TypingIndicator() {
   return (
     <div className="flex items-end gap-3 animate-fade-in">
@@ -354,7 +603,6 @@ function TypingIndicator() {
   );
 }
 
-// Tip bubble component
 function TipBubble({ tip }: { tip: { emoji: string; text: string } }) {
   return (
     <div className="flex justify-center py-2 animate-fade-in">
@@ -366,7 +614,6 @@ function TipBubble({ tip }: { tip: { emoji: string; text: string } }) {
   );
 }
 
-// Animated heart reaction component - positioned on TOP-LEFT of user messages
 function HeartReaction({ show, isUser }: { show: boolean; isUser: boolean }) {
   const [hasAnimated, setHasAnimated] = useState(false);
   
@@ -389,7 +636,6 @@ function HeartReaction({ show, isUser }: { show: boolean; isUser: boolean }) {
   );
 }
 
-// GIF message component with loading state
 function GifMessage({ url, title }: { url: string; title?: string }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
@@ -423,7 +669,6 @@ function GifMessage({ url, title }: { url: string; title?: string }) {
   );
 }
 
-// Message bubble component
 function MessageBubble({ message }: { message: Message }) {
   const isEmma = message.type === 'emma';
   const isUser = message.type === 'user';
@@ -432,7 +677,6 @@ function MessageBubble({ message }: { message: Message }) {
   const isGif = message.type === 'gif';
   const [showReaction, setShowReaction] = useState(false);
 
-  // Animate reaction appearing
   useEffect(() => {
     if (message.reaction && isUser) {
       const timer = setTimeout(() => setShowReaction(true), 800);
@@ -470,12 +714,9 @@ function MessageBubble({ message }: { message: Message }) {
       {isEmma && <EmmaAvatar size="sm" />}
       
       <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-        {/* Message bubble wrapper - relative for heart positioning */}
         <div className="relative">
-          {/* Heart reaction - TOP LEFT of bubble */}
           {isUser && <HeartReaction show={showReaction && message.reaction === 'heart'} isUser={true} />}
           
-          {/* Message bubble */}
           <div
             className={`rounded-2xl px-3.5 py-2 shadow-sm ${
               isUser
@@ -490,7 +731,6 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         </div>
         
-        {/* Timestamp + read receipts - OUTSIDE bubble, small and subtle */}
         <div className={`flex items-center gap-1 mt-0.5 px-1 ${isUser ? 'flex-row-reverse' : ''}`}>
           <span className="text-[10px] text-slate-400">
             {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -512,7 +752,6 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// Star rating component
 function StarRating({ onSelect, disabled }: { onSelect: (rating: number) => void; disabled: boolean }) {
   const [hoveredStar, setHoveredStar] = useState(0);
   const [selectedStar, setSelectedStar] = useState(0);
@@ -564,7 +803,6 @@ function StarRating({ onSelect, disabled }: { onSelect: (rating: number) => void
   );
 }
 
-// Arrival options selector - Premium card buttons
 function ArrivalSelector({ options, onSelect, disabled }: { 
   options: ArrivalOption[]; 
   onSelect: (id: string) => void;
@@ -607,7 +845,6 @@ function ArrivalSelector({ options, onSelect, disabled }: {
                   : 'bg-white hover:bg-gradient-to-br hover:' + getGradient(option.id).replace('from-', 'hover:from-').replace('to-', 'hover:to-') + ' border-2 border-sand-200 hover:border-transparent hover:text-white shadow-sm hover:shadow-xl hover:scale-105'
               } active:scale-95 disabled:cursor-not-allowed`}
             >
-              {/* Shimmer effect */}
               <div className={`absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ${selected === option.id ? 'translate-x-full' : ''}`} />
               
               <span className={`text-4xl transition-transform duration-300 ${selected === option.id ? 'scale-110 animate-bounce' : 'group-hover:scale-110'}`}>
@@ -619,7 +856,6 @@ function ArrivalSelector({ options, onSelect, disabled }: {
                 {option.label}
               </span>
               
-              {/* Check mark when selected */}
               {selected === option.id && (
                 <div className="absolute top-2 right-2 w-5 h-5 bg-white/30 rounded-full flex items-center justify-center animate-scale-in">
                   <Check className="w-3 h-3 text-white" />
@@ -633,7 +869,6 @@ function ArrivalSelector({ options, onSelect, disabled }: {
   );
 }
 
-// Activity options selector (multiple choice) - Premium list buttons
 function ActivitySelector({ options, onSelect, disabled }: { 
   options: ActivityOption[]; 
   onSelect: (id: string) => void;
@@ -680,12 +915,10 @@ function ActivitySelector({ options, onSelect, disabled }: {
                     : 'bg-white border-2 border-sand-200 hover:border-transparent hover:shadow-lg'
                 } active:scale-[0.98] disabled:cursor-not-allowed`}
               >
-                {/* Hover gradient overlay */}
                 {selected !== option.id && (
                   <div className={`absolute inset-0 bg-gradient-to-r ${colors.bg} opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />
                 )}
                 
-                {/* Shimmer effect */}
                 <div className={`absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700`} />
                 
                 <div className={`relative z-10 w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
@@ -704,7 +937,6 @@ function ActivitySelector({ options, onSelect, disabled }: {
                   {option.label}
                 </span>
                 
-                {/* Check mark or arrow */}
                 <div className="relative z-10">
                   {selected === option.id ? (
                     <div className="w-7 h-7 rounded-full bg-white/30 flex items-center justify-center animate-scale-in">
@@ -725,12 +957,87 @@ function ActivitySelector({ options, onSelect, disabled }: {
   );
 }
 
-// Completion celebration component
+// Main Menu Selector for returning users
+function MainMenuSelector({ options, onSelect, disabled }: { 
+  options: MainMenuOption[]; 
+  onSelect: (id: string) => void;
+  disabled: boolean;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const handleSelect = (id: string) => {
+    if (disabled || selected) return;
+    setSelected(id);
+    setTimeout(() => onSelect(id), 300);
+  };
+
+  const getColor = (id: string) => {
+    switch (id) {
+      case 'rate': return { bg: 'from-amber-400 to-orange-500', icon: <Star className="w-6 h-6" /> };
+      case 'recommend': return { bg: 'from-emerald-400 to-teal-500', icon: <MapPin className="w-6 h-6" /> };
+      case 'chat': return { bg: 'from-violet-400 to-purple-500', icon: <MessageCircle className="w-6 h-6" /> };
+      case 'help': return { bg: 'from-rose-400 to-pink-500', icon: <HelpCircle className="w-6 h-6" /> };
+      default: return { bg: 'from-coral to-sunset', icon: <Sparkles className="w-6 h-6" /> };
+    }
+  };
+
+  return (
+    <div className="flex items-end gap-3 animate-message-appear">
+      <EmmaAvatar />
+      <div className="flex-1 max-w-[85%]">
+        <div className="bg-white rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm border border-sand-200 mb-3">
+          <p className="text-[15px] text-slate-700">{EMMA_MESSAGES.mainMenuPrompt}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {options.map((option, index) => {
+            const colors = getColor(option.id);
+            return (
+              <button
+                key={option.id}
+                onClick={() => handleSelect(option.id)}
+                disabled={disabled || !!selected}
+                style={{ animationDelay: `${index * 100}ms` }}
+                className={`group relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-all duration-300 animate-fade-in overflow-hidden ${
+                  selected === option.id
+                    ? `bg-gradient-to-br ${colors.bg} text-white shadow-lg scale-105`
+                    : 'bg-white border-2 border-sand-200 hover:border-transparent hover:shadow-xl hover:scale-105'
+                } active:scale-95 disabled:cursor-not-allowed`}
+              >
+                <div className={`absolute inset-0 bg-gradient-to-br ${colors.bg} opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />
+                
+                <div className={`relative z-10 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ${
+                  selected === option.id
+                    ? 'bg-white/20'
+                    : `bg-gradient-to-br ${colors.bg} group-hover:bg-white/20`
+                }`}>
+                  <span className={`text-2xl ${selected === option.id ? 'text-white' : 'text-white group-hover:text-white'}`}>
+                    {option.emoji}
+                  </span>
+                </div>
+                
+                <span className={`relative z-10 text-sm font-semibold transition-colors ${
+                  selected === option.id ? 'text-white' : 'text-slate-700 group-hover:text-white'
+                }`}>
+                  {option.label}
+                </span>
+                <span className={`relative z-10 text-xs transition-colors ${
+                  selected === option.id ? 'text-white/80' : 'text-slate-500 group-hover:text-white/80'
+                }`}>
+                  {option.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CompletionCard({ userName }: { userName: string }) {
   return (
     <div className="flex justify-center py-6 animate-scale-in">
       <div className="relative flex flex-col items-center gap-4 px-8 py-6 rounded-3xl bg-gradient-to-br from-coral/10 via-sunset/10 to-palm/10 border border-coral/20 shadow-xl overflow-hidden">
-        {/* Animated background decorations */}
         <div className="absolute -top-4 -left-4 text-4xl opacity-20 animate-float">🌺</div>
         <div className="absolute -bottom-2 -right-2 text-3xl opacity-20 animate-float" style={{ animationDelay: '1s' }}>🌴</div>
         <div className="absolute top-1/2 -right-6 text-2xl opacity-20 animate-float" style={{ animationDelay: '0.5s' }}>🐚</div>
@@ -763,7 +1070,6 @@ function CompletionCard({ userName }: { userName: string }) {
   );
 }
 
-// Email input with validation
 function EmailInput({ 
   value, 
   onChange, 
@@ -809,7 +1115,12 @@ function EmailInput({
   );
 }
 
+// ============================================
+// MAIN COMPONENT
+// ============================================
+
 export default function EmmaChat() {
+  // State
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [currentStep, setCurrentStep] = useState<SurveyStep>('splash');
@@ -820,14 +1131,22 @@ export default function EmmaChat() {
   const [userArrival, setUserArrival] = useState('');
   const [emailError, setEmailError] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
+  
+  // User identity state
+  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
+  const [isReturningUser, setIsReturningUser] = useState(false);
+  const [sessionToken, setSessionToken] = useState<string>('');
+  const [browserFingerprint, setBrowserFingerprint] = useState<string>('');
+  
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Callbacks
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  // Mark messages as read after a delay
   const markAsRead = useCallback((messageId: string) => {
     setTimeout(() => {
       setMessages(prev => prev.map(m => 
@@ -841,35 +1160,41 @@ export default function EmmaChat() {
     }, 800);
   }, []);
 
-  // Add Emma messages with typing delay - includes GIF when 2+ messages
+  const addReactionToMessage = useCallback((messageId: string, reaction: 'heart' | 'like' | 'fire' | 'clap') => {
+    setMessages(prev => prev.map(msg => 
+      msg.id === messageId ? { ...msg, reaction } : msg
+    ));
+  }, []);
+
   const addEmmaMessages = useCallback(async (
     contents: string[], 
     nextStep?: SurveyStep,
     gifType?: GifType,
-    gifFirst?: boolean // If true, show GIF before text messages
+    gifFirst?: boolean
   ) => {
     setIsTyping(true);
     
-    // Filter out empty or emoji-only messages
-    const validContents = contents.filter(c => {
-      if (!c || c.trim().length === 0) return false;
-      if (c.trim().length <= 2) return false;
-      return true;
-    });
+    const validContents = contents.filter(c => c && c.trim().length > 2);
     
-    // If GIF first, show the GIF before any text
     if (gifFirst && gifType) {
       await new Promise(resolve => setTimeout(resolve, 600));
       const gif = await getReactionGif(gifType);
       if (gif && gif.url) {
-        setMessages(prev => [...prev, {
+        const gifMessage: Message = {
           id: `gif-${Date.now()}`,
           type: 'gif',
           content: gif.title || '',
           gifUrl: gif.url,
           timestamp: new Date(),
           animate: true,
-        }]);
+        };
+        setMessages(prev => [...prev, gifMessage]);
+        
+        // Save to DB
+        if (sessionToken) {
+          saveMessageToDb(sessionToken, 'emma', `[GIF: ${gifType}]`, { message_type: 'gif' });
+        }
+        
         setIsTyping(true);
         await new Promise(resolve => setTimeout(resolve, 500));
       }
@@ -881,19 +1206,23 @@ export default function EmmaChat() {
       return;
     }
     
-    // Show text messages
     for (let i = 0; i < validContents.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 700 + Math.random() * 300));
       
-      setMessages(prev => [...prev, {
+      const newMessage: Message = {
         id: `emma-${Date.now()}-${i}`,
         type: 'emma',
         content: validContents[i],
         timestamp: new Date(),
         animate: true,
-      }]);
+      };
+      setMessages(prev => [...prev, newMessage]);
       
-      // If NOT gifFirst and we have 2+ messages, insert GIF after first message
+      // Save to DB
+      if (sessionToken) {
+        saveMessageToDb(sessionToken, 'emma', validContents[i]);
+      }
+      
       if (!gifFirst && gifType && i === 0 && validContents.length >= 2) {
         setIsTyping(true);
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -924,77 +1253,90 @@ export default function EmmaChat() {
     }
     
     setTimeout(() => inputRef.current?.focus(), 100);
+  }, [sessionToken]);
+
+  // Initialize on mount
+  useEffect(() => {
+    const init = async () => {
+      // Get or create session token
+      const token = getSessionToken();
+      setSessionToken(token);
+      
+      // Generate fingerprint
+      let fp = getStoredFingerprint();
+      if (!fp) {
+        fp = await generateBrowserFingerprint();
+        storeFingerprint(fp);
+      }
+      setBrowserFingerprint(fp);
+    };
+    
+    init();
   }, []);
 
-  // Add celebration message
-  const addCelebration = useCallback(async (content: string) => {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    setMessages(prev => [...prev, {
-      id: `celebration-${Date.now()}`,
-      type: 'celebration',
-      content,
-      timestamp: new Date(),
-      animate: true,
-    }]);
-  }, []);
-
-  // Add tip message
-  const addTip = useCallback(async (tip: { emoji: string; text: string }) => {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setMessages(prev => [...prev, {
-      id: `tip-${Date.now()}`,
-      type: 'tip',
-      content: tip.text,
-      timestamp: new Date(),
-      animate: true,
-    }]);
-  }, []);
-
-  // Initialize welcome sequence after splash
-  const startChat = useCallback(async () => {
-    setCurrentStep('welcome');
-    await new Promise(resolve => setTimeout(resolve, 300));
-    // GIF first (waving hello), then intro message
-    await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
-  }, [addEmmaMessages]);
+  // Check for returning user after splash
+  const checkReturningUser = useCallback(async () => {
+    if (!browserFingerprint) return;
+    
+    setCurrentStep('loading');
+    
+    try {
+      const result = await identifyUser(browserFingerprint);
+      
+      if (result.user && result.isReturningUser) {
+        setCurrentUser(result.user);
+        setIsReturningUser(true);
+        setUserName(result.user.name);
+        setUserEmail(result.user.email);
+        storeUserId(result.user.id);
+        
+        // Create conversation linked to user
+        await createConversation(sessionToken, result.user.id);
+        
+        setCurrentStep('welcome_back');
+        
+        // Welcome back flow
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        const welcomeMsg = EMMA_MESSAGES.welcomeBack(
+          result.user.name,
+          result.user.visit_count,
+          result.user.last_seen_at
+        );
+        const followUp = EMMA_MESSAGES.welcomeBackFollowUp(result.user.last_seen_at);
+        
+        await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
+        
+      } else {
+        // New user flow
+        await createConversation(sessionToken);
+        setCurrentStep('welcome');
+        
+        await new Promise(resolve => setTimeout(resolve, 300));
+        await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+      }
+    } catch (error) {
+      console.error('User check failed:', error);
+      // Fall back to new user flow
+      await createConversation(sessionToken);
+      setCurrentStep('welcome');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+    }
+  }, [browserFingerprint, sessionToken, addEmmaMessages]);
 
   // Scroll on new messages
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping, scrollToBottom]);
 
-  // Handle user input submission
-  // Helper to add a heart reaction to a message
-  const addReactionToMessage = (messageId: string, reaction: 'heart' | 'like' | 'fire' | 'clap') => {
-    setMessages(prev => prev.map(msg => 
-      msg.id === messageId ? { ...msg, reaction } : msg
-    ));
-  };
-
-  // Helper to add a GIF message
-  const addGifMessage = async (gifType: GifType) => {
-    const gif = await getReactionGif(gifType);
-    if (gif) {
-      const gifMessage: Message = {
-        id: `gif-${Date.now()}`,
-        type: 'gif',
-        content: gif.title,
-        gifUrl: gif.url,
-        timestamp: new Date(),
-        animate: true,
-      };
-      setMessages(prev => [...prev, gifMessage]);
-      await new Promise(resolve => setTimeout(resolve, 400));
-    }
-  };
-
+  // Handle form submission
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || isTyping) return;
 
     const userInput = input.trim();
 
-    // Email validation
     if (currentStep === 'email') {
       if (!isValidEmail(userInput)) {
         setEmailError(true);
@@ -1006,7 +1348,6 @@ export default function EmmaChat() {
     setInput('');
     setEmailError(false);
 
-    // Add user message
     const userMessageId = `user-${Date.now()}`;
     setMessages(prev => [...prev, {
       id: userMessageId,
@@ -1018,16 +1359,18 @@ export default function EmmaChat() {
       read: false,
     }]);
     markAsRead(userMessageId);
+    
+    // Save to DB
+    if (sessionToken) {
+      saveMessageToDb(sessionToken, 'user', userInput);
+    }
 
-    // Process based on current step
     if (currentStep === 'name') {
       const extractedName = extractName(userInput);
       setUserName(extractedName);
       
-      // Add heart reaction to their name message
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Show "cool" GIF first, then short reaction + ask email
       await new Promise(resolve => setTimeout(resolve, 600));
       const nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
       await addEmmaMessages([nameReaction, EMMA_MESSAGES.askEmail], 'email', 'cool_name', true);
@@ -1035,16 +1378,59 @@ export default function EmmaChat() {
     } else if (currentStep === 'email') {
       setUserEmail(userInput);
       
-      // Add heart reaction to their email
+      // Check if this email belongs to existing user
+      try {
+        const result = await identifyUser(browserFingerprint, userInput, userName);
+        
+        if (result.user && result.isReturningUser && !isReturningUser) {
+          // They're a returning user on a new device!
+          setCurrentUser(result.user);
+          setIsReturningUser(true);
+          storeUserId(result.user.id);
+          
+          setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
+          
+          await new Promise(resolve => setTimeout(resolve, 600));
+          await addEmmaMessages([
+            `Wait... ${result.user.name}! I remember you! 🎉`,
+            `You came back! This is visit #${result.user.visit_count}!`
+          ], 'main_menu', 'welcome_back', true);
+          
+          return;
+        } else if (result.user) {
+          // New user created
+          setCurrentUser(result.user);
+          storeUserId(result.user.id);
+        }
+      } catch (error) {
+        console.error('Email check failed:', error);
+      }
+      
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
-      // Show "thank you" GIF first, then short thanks + ask arrival
       await new Promise(resolve => setTimeout(resolve, 600));
       await addEmmaMessages([EMMA_MESSAGES.emailResponse, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you', true);
+      
+    } else if (currentStep === 'free_chat') {
+      // Free chat mode - use AI
+      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
+      
+      setIsTyping(true);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // For now, simple responses - Phase 3 will enhance this
+      const responses = [
+        "That's interesting! Tell me more about your Tobago experience! 🌴",
+        "Love hearing about your adventures! What else is on your mind?",
+        "Sounds amazing! Tobago really is special, isn't it? 🌺",
+      ];
+      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+      
+      await addEmmaMessages([randomResponse], 'free_chat');
     }
   };
 
-  // Handle arrival option selection
+  // Handle arrival selection
   const handleArrivalSelect = async (arrivalId: string) => {
     const option = ARRIVAL_OPTIONS.find(o => o.id === arrivalId);
     if (!option) return;
@@ -1063,16 +1449,21 @@ export default function EmmaChat() {
     }]);
     markAsRead(userMessageId);
     
-    // Add heart reaction
+    if (sessionToken) {
+      saveMessageToDb(sessionToken, 'user', `${option.emoji} ${option.label}`, { 
+        message_type: 'selection',
+        selection_value: arrivalId 
+      });
+    }
+    
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
 
-    // Show GIF for arrival method first, then short reaction + rating question
     await new Promise(resolve => setTimeout(resolve, 600));
     const arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
     await addEmmaMessages([arrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType, true);
   };
 
-  // Handle star rating
+  // Handle rating selection
   const handleRatingSelect = async (rating: number) => {
     setUserRating(rating);
     
@@ -1087,14 +1478,18 @@ export default function EmmaChat() {
       read: false,
     }]);
     markAsRead(userMessageId);
+    
+    if (sessionToken) {
+      saveMessageToDb(sessionToken, 'user', `${rating}/5 stars`, { 
+        message_type: 'rating',
+        rating_value: rating 
+      });
+    }
 
-    // Add heart reaction
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
-    // Determine GIF type based on rating
     const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
     
-    // Show rating GIF first, then short reaction + activities question
     await new Promise(resolve => setTimeout(resolve, 600));
     const ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
     await addEmmaMessages([ratingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType, true);
@@ -1117,25 +1512,29 @@ export default function EmmaChat() {
     }]);
     markAsRead(userMessageId);
     
-    // Add heart reaction
+    if (sessionToken) {
+      saveMessageToDb(sessionToken, 'user', `${option.emoji} ${option.label}`, { 
+        message_type: 'selection',
+        selection_value: activityId 
+      });
+    }
+    
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
-    // Show activity GIF first, then short tip + farewell
     await new Promise(resolve => setTimeout(resolve, 600));
     const activityReaction = EMMA_MESSAGES.activityResponse(activityId);
     await addEmmaMessages([activityReaction, `Have an amazing time, ${userName}! 🌴`], 'complete', activityId as GifType, true);
     
-    // Show confetti!
     setShowConfetti(true);
     setTimeout(() => setShowConfetti(false), 4000);
 
     // Save survey to database
     try {
-      const response = await fetch('/api/emma/survey', {
+      await fetch('/api/emma/survey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: crypto.randomUUID(),
+          session_id: sessionToken,
           name: userName,
           email: userEmail,
           arrival_method: userArrival,
@@ -1143,23 +1542,84 @@ export default function EmmaChat() {
           activity_interest: activityId,
         }),
       });
+      console.log('✅ Survey saved!');
       
-      if (response.ok) {
-        console.log('✅ Survey saved successfully!');
-      } else {
-        const data = await response.json();
-        console.log('Survey save response:', data);
+      // Save memory about their preferences
+      if (currentUser) {
+        await saveMemory(currentUser.id, {
+          memory_type: 'preference',
+          category: activityId,
+          raw_text: `Interested in ${option.label}`,
+          sentiment: 'positive',
+          importance: 7,
+        });
       }
     } catch (error) {
       console.error('Failed to save survey:', error);
     }
   };
 
-  // Get placeholder text based on step
+  // Handle main menu selection (returning users)
+  const handleMainMenuSelect = async (menuId: string) => {
+    const option = MAIN_MENU_OPTIONS.find(o => o.id === menuId);
+    if (!option) return;
+
+    const userMessageId = `user-${Date.now()}`;
+    setMessages(prev => [...prev, {
+      id: userMessageId,
+      type: 'user',
+      content: `${option.emoji} ${option.label}`,
+      timestamp: new Date(),
+      animate: true,
+      delivered: false,
+      read: false,
+    }]);
+    markAsRead(userMessageId);
+
+    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
+
+    switch (menuId) {
+      case 'rate':
+        await new Promise(resolve => setTimeout(resolve, 600));
+        await addEmmaMessages([
+          "Let's hear about your experience! 🌟",
+          "What did you check out? A restaurant, beach, activity...?"
+        ], 'rating_flow', 'excited', true);
+        break;
+        
+      case 'recommend':
+        await new Promise(resolve => setTimeout(resolve, 600));
+        await addEmmaMessages([
+          "I love helping with recommendations! 🗺️",
+          "What are you in the mood for today?"
+        ], 'activities', 'excited', true);
+        break;
+        
+      case 'chat':
+        await new Promise(resolve => setTimeout(resolve, 600));
+        await addEmmaMessages([
+          "I'm all ears! 💬",
+          "What's on your mind? How's your Tobago adventure going?"
+        ], 'free_chat', 'excited', true);
+        break;
+        
+      case 'help':
+        await new Promise(resolve => setTimeout(resolve, 600));
+        await addEmmaMessages([
+          "I'm here to help! 🆘",
+          "What do you need? Directions, emergency info, recommendations?"
+        ], 'free_chat', 'excited', true);
+        break;
+    }
+  };
+
+  // Get placeholder text
   const getPlaceholder = () => {
     switch (currentStep) {
       case 'name': return 'Type your name...';
       case 'email': return 'your@email.com';
+      case 'free_chat': return 'Chat with Emma...';
+      case 'rating_flow': return 'Describe what you visited...';
       default: return 'Type a message...';
     }
   };
@@ -1171,23 +1631,30 @@ export default function EmmaChat() {
     currentStep === 'activities' || 
     currentStep === 'complete' || 
     currentStep === 'welcome' ||
-    currentStep === 'splash';
+    currentStep === 'welcome_back' ||
+    currentStep === 'main_menu' ||
+    currentStep === 'splash' ||
+    currentStep === 'loading';
 
-  // Get step number for progress indicator
+  // Get step number for progress
   const getStepNumber = () => {
     const steps: SurveyStep[] = ['name', 'email', 'arrival', 'rating', 'activities'];
     const index = steps.indexOf(currentStep);
-    return index >= 0 ? index : (currentStep === 'complete' ? steps.length : 0);
+    return index >= 0 ? index : (currentStep === 'complete' ? steps.length : -1);
   };
 
-  // Show splash screen
+  // Render splash screen
   if (currentStep === 'splash') {
-    return <SplashScreen onComplete={startChat} />;
+    return <SplashScreen onComplete={checkReturningUser} />;
+  }
+
+  // Render loading screen
+  if (currentStep === 'loading') {
+    return <LoadingScreen />;
   }
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-gradient-to-b from-sand-50 via-white to-sand-50">
-      {/* Confetti */}
       {showConfetti && <Confetti />}
       
       {/* Header */}
@@ -1202,7 +1669,9 @@ export default function EmmaChat() {
                 Online
               </span>
             </h1>
-            <p className="text-xs text-slate-500">Your Tobago Welcome Buddy 🌴</p>
+            <p className="text-xs text-slate-500">
+              {isReturningUser ? `Welcome back, ${userName}! 🌴` : 'Your Tobago Welcome Buddy 🌴'}
+            </p>
           </div>
           <div className="flex items-center gap-1">
             <Sun className="w-5 h-5 text-sunset animate-spin-slow" />
@@ -1211,7 +1680,7 @@ export default function EmmaChat() {
         </div>
       </header>
 
-      {/* Chat Background Pattern */}
+      {/* Background */}
       <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-4 text-6xl opacity-10 animate-float">🌺</div>
         <div className="absolute top-40 right-8 text-4xl opacity-10 animate-float" style={{ animationDelay: '1s' }}>🌴</div>
@@ -1220,27 +1689,29 @@ export default function EmmaChat() {
         <div className="absolute bottom-60 left-12 text-5xl opacity-10 animate-float" style={{ animationDelay: '1.5s' }}>🦜</div>
       </div>
 
-      {/* Messages Area */}
+      {/* Messages */}
       <main className="flex-1 overflow-y-auto smooth-scroll px-4 py-4 space-y-4 pb-28">
-        {/* Date separator */}
         <div className="flex justify-center">
           <span className="px-3 py-1 rounded-full bg-sand-100 text-xs text-slate-500 font-medium">
             Today
           </span>
         </div>
 
-        {/* Messages */}
         {messages.map((message) => (
-          <MessageBubble 
-            key={message.id} 
-            message={message}
-          />
+          <MessageBubble key={message.id} message={message} />
         ))}
 
-        {/* Typing indicator */}
         {isTyping && <TypingIndicator />}
 
-        {/* Arrival options */}
+        {/* Conditional UI elements */}
+        {currentStep === 'main_menu' && !isTyping && (
+          <MainMenuSelector 
+            options={MAIN_MENU_OPTIONS} 
+            onSelect={handleMainMenuSelect}
+            disabled={isTyping}
+          />
+        )}
+
         {currentStep === 'arrival' && !isTyping && (
           <ArrivalSelector 
             options={ARRIVAL_OPTIONS} 
@@ -1249,7 +1720,6 @@ export default function EmmaChat() {
           />
         )}
 
-        {/* Star rating */}
         {currentStep === 'rating' && !isTyping && (
           <StarRating 
             onSelect={handleRatingSelect}
@@ -1257,7 +1727,6 @@ export default function EmmaChat() {
           />
         )}
 
-        {/* Activity options */}
         {currentStep === 'activities' && !isTyping && (
           <ActivitySelector 
             options={ACTIVITY_OPTIONS} 
@@ -1266,7 +1735,6 @@ export default function EmmaChat() {
           />
         )}
 
-        {/* Completion celebration */}
         {currentStep === 'complete' && !isTyping && (
           <CompletionCard userName={userName} />
         )}
@@ -1309,21 +1777,23 @@ export default function EmmaChat() {
             </button>
           </form>
           
-          {/* Step indicator */}
-          <div className="flex justify-center gap-2 mt-3">
-            {['name', 'email', 'arrival', 'rating', 'activities'].map((step, index) => (
-              <div
-                key={step}
-                className={`h-1.5 rounded-full transition-all duration-500 ${
-                  getStepNumber() === index
-                    ? 'w-8 bg-gradient-to-r from-coral to-sunset'
-                    : getStepNumber() > index || currentStep === 'complete'
-                    ? 'w-4 bg-palm'
-                    : 'w-4 bg-sand-300'
-                }`}
-              />
-            ))}
-          </div>
+          {/* Progress indicator - only show during survey */}
+          {getStepNumber() >= 0 && (
+            <div className="flex justify-center gap-2 mt-3">
+              {['name', 'email', 'arrival', 'rating', 'activities'].map((step, index) => (
+                <div
+                  key={step}
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    getStepNumber() === index
+                      ? 'w-8 bg-gradient-to-r from-coral to-sunset'
+                      : getStepNumber() > index || currentStep === 'complete'
+                      ? 'w-4 bg-palm'
+                      : 'w-4 bg-sand-300'
+                  }`}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </footer>
     </div>

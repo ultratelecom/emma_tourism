@@ -35,7 +35,8 @@ type ResponseType =
   | 'arrival_reaction'   // React to how they arrived
   | 'rating_reaction'    // React to their journey rating
   | 'activity_tip'       // Give tip based on activity interest
-  | 'farewell';          // Personalized goodbye
+  | 'farewell'           // Personalized goodbye
+  | 'welcome_back';      // Welcome returning user
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,6 +48,9 @@ export async function POST(request: NextRequest) {
         arrivalMethod?: 'plane' | 'cruise' | 'ferry';
         rating?: number;
         activity?: 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos';
+        isReturningUser?: boolean;
+        visitCount?: number;
+        lastRating?: { place: string; rating: number };
       };
     };
 
@@ -90,6 +94,16 @@ Give ONE specific, insider tip or recommendation (1-2 sentences). Be specific wi
 Keep it SHORT (1 sentence). Make them feel excited about their Tobago adventure.`;
         break;
 
+      case 'welcome_back':
+        const visitText = context.visitCount === 2 ? 'second time' : 
+                         context.visitCount && context.visitCount <= 5 ? `${context.visitCount}th time` : 
+                         'again';
+        const lastRatingText = context.lastRating ? 
+          ` Last time they rated ${context.lastRating.place} ${context.lastRating.rating} stars.` : '';
+        userPrompt = `${context.name} is back for the ${visitText}!${lastRatingText}
+Give a SHORT, excited welcome back (1 sentence). Make them feel remembered and special. Reference something about them being a regular or loving Tobago.`;
+        break;
+
       default:
         return NextResponse.json({ error: 'Invalid response type' }, { status: 400 });
     }
@@ -116,7 +130,8 @@ Keep it SHORT (1 sentence). Make them feel excited about their Tobago adventure.
       arrival_reaction: "What a way to arrive in paradise! 🏝️",
       rating_reaction: "Thanks for sharing! Tobago is about to blow your mind! 🌴",
       activity_tip: "You're going to love exploring Tobago! I have so many recommendations for you!",
-      farewell: "Have the most amazing time in Tobago! 🌺"
+      farewell: "Have the most amazing time in Tobago! 🌺",
+      welcome_back: "You're back! So good to see you again! 🎉"
     };
 
     const { type } = await request.json().catch(() => ({ type: 'name_reaction' }));

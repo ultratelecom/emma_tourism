@@ -156,6 +156,17 @@ const CURATED_GIFS: Record<string, string[]> = {
     '3ornka9rAaKRA2Rkac', // Enjoy wave
   ],
   
+  // WELCOME BACK - Returning user celebration
+  welcome_back: [
+    '3ohzdIuqJoo8QdKlnW', // Excited to see you
+    'l0MYGb1LuZ3n7dRnO',  // Welcoming back
+    'xT9IgG50Fb7Mi0prBC', // Happy to see you
+    '3o7abKhOpu0NwenH3O', // Miss you!
+    'd3mlE7uhX8KFgEmY',   // Happy clapping
+    '3oriO5t2QB4IPKgxHi', // So glad you're back
+    '26BRuo6sLetdllPAQ',  // Welcome!
+  ],
+  
   // GENERIC EXCITEMENT
   excited: [
     '5GoVLqeAOo6PK',      // Excited!
