@@ -1419,22 +1419,38 @@ export default function EmmaChat() {
       await new Promise(resolve => setTimeout(resolve, 600));
       await addEmmaMessages([EMMA_MESSAGES.emailResponse, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you', true);
       
-    } else if (currentStep === 'free_chat') {
-      // Free chat mode - use AI
+    } else if (currentStep === 'free_chat' || currentStep === 'rating_flow') {
+      // Free chat mode - use REAL AI
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
       
       setIsTyping(true);
-      await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // For now, simple responses - Phase 3 will enhance this
-      const responses = [
-        "That's interesting! Tell me more about your Tobago experience! 🌴",
-        "Love hearing about your adventures! What else is on your mind?",
-        "Sounds amazing! Tobago really is special, isn't it? 🌺",
-      ];
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      
-      await addEmmaMessages([randomResponse], 'free_chat');
+      try {
+        // Call the AI chat endpoint for intelligent responses
+        const response = await fetch('/api/emma/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: userInput,
+            user_name: userName,
+            user_id: currentUser?.id,
+            session_token: sessionToken,
+            conversation_history: messages.slice(-10).map(m => ({
+              role: m.type === 'user' ? 'user' : 'assistant',
+              content: m.content,
+            })),
+          }),
+        });
+        
+        if (!response.ok) throw new Error('Chat failed');
+        
+        const data = await response.json();
+        await addEmmaMessages([data.response], 'free_chat', data.gif_type);
+      } catch (error) {
+        console.error('AI chat error:', error);
+        // Fallback to simple response if AI fails
+        await addEmmaMessages(["Hmm, let me think... Could you tell me more about what you're looking for? 🤔"], 'free_chat');
+      }
     }
   };
 
