@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle, RefreshCcw, MessageCircle, MapPin, HelpCircle } from 'lucide-react';
+import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle, RefreshCcw, MessageCircle, MapPin, HelpCircle, ExternalLink, Phone, Navigation, Clock } from 'lucide-react';
+import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from '@/lib/tobago-places';
 
 // ============================================
 // TYPES & INTERFACES
@@ -31,7 +32,7 @@ interface GifData {
 
 interface Message {
   id: string;
-  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip' | 'gif';
+  type: 'emma' | 'user' | 'options' | 'celebration' | 'tip' | 'gif' | 'places';
   content: string;
   timestamp: Date;
   animate?: boolean;
@@ -39,6 +40,7 @@ interface Message {
   read?: boolean;
   reaction?: 'heart' | 'like' | 'fire' | 'clap';
   gifUrl?: string;
+  places?: TobagoPlace[];
 }
 
 interface ArrivalOption {
@@ -677,12 +679,152 @@ function GifMessage({ url, title }: { url: string; title?: string }) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+// ============================================
+// PLACE CARD COMPONENT
+// ============================================
+
+function PlaceCard({ place, onSelect }: { place: TobagoPlace; onSelect?: (place: TobagoPlace) => void }) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  
+  const handleDirections = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const query = encodeURIComponent(`${place.name}, Tobago`);
+    window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
+  };
+  
+  const handleCall = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (place.phone) {
+      window.location.href = `tel:${place.phone}`;
+    }
+  };
+  
+  return (
+    <div 
+      onClick={() => onSelect?.(place)}
+      className="group flex-shrink-0 w-[280px] bg-white rounded-2xl shadow-lg border border-sand-200 overflow-hidden transition-all duration-300 hover:shadow-xl hover:scale-[1.02] hover:border-coral/30 cursor-pointer"
+    >
+      {/* Image */}
+      <div className="relative h-36 bg-gradient-to-br from-sand-100 to-sand-200 overflow-hidden">
+        {!imageLoaded && !imageError && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-coral/30 border-t-coral rounded-full animate-spin" />
+          </div>
+        )}
+        {imageError ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-coral/20 to-sunset/20">
+            <span className="text-5xl">{getCategoryIcon(place.category)}</span>
+          </div>
+        ) : (
+          <img 
+            src={place.imageUrl}
+            alt={place.name}
+            className={`w-full h-full object-cover transition-all duration-500 group-hover:scale-110 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => setImageError(true)}
+          />
+        )}
+        
+        {/* Category badge */}
+        <div className="absolute top-2 left-2 px-2 py-1 rounded-full bg-white/90 backdrop-blur-sm text-xs font-medium text-slate-700 flex items-center gap-1 shadow-sm">
+          <span>{getCategoryIcon(place.category)}</span>
+          <span>{place.subcategory}</span>
+        </div>
+        
+        {/* Price badge */}
+        <div className="absolute top-2 right-2 px-2 py-1 rounded-full bg-white/90 backdrop-blur-sm text-xs font-semibold text-emerald-600 shadow-sm">
+          {getPriceSymbol(place.priceLevel)}
+        </div>
+      </div>
+      
+      {/* Content */}
+      <div className="p-3">
+        {/* Name and Rating */}
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <h3 className="font-bold text-slate-800 text-sm leading-tight line-clamp-1 group-hover:text-coral transition-colors">
+            {place.name}
+          </h3>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+            <span className="text-xs font-bold text-slate-700">{place.rating}</span>
+            <span className="text-xs text-slate-400">({place.reviewCount})</span>
+          </div>
+        </div>
+        
+        {/* Location */}
+        <div className="flex items-center gap-1 text-xs text-slate-500 mb-2">
+          <MapPin className="w-3 h-3" />
+          <span className="line-clamp-1">{place.location}</span>
+        </div>
+        
+        {/* Emma's Note */}
+        <div className="bg-gradient-to-r from-coral/5 to-sunset/5 rounded-lg p-2 mb-3 border border-coral/10">
+          <p className="text-xs text-slate-600 italic leading-relaxed">
+            💬 "{place.emmaNote}"
+          </p>
+        </div>
+        
+        {/* Must Try */}
+        {place.mustTry && (
+          <div className="flex items-center gap-1.5 mb-3">
+            <span className="text-xs font-semibold text-coral">Must try:</span>
+            <span className="text-xs text-slate-600">{place.mustTry}</span>
+          </div>
+        )}
+        
+        {/* Action Buttons */}
+        <div className="flex gap-2">
+          <button
+            onClick={handleDirections}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-ocean to-ocean-dark text-white text-xs font-semibold rounded-xl hover:shadow-md transition-all active:scale-95"
+          >
+            <Navigation className="w-3.5 h-3.5" />
+            Directions
+          </button>
+          {place.phone && (
+            <button
+              onClick={handleCall}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 bg-sand-100 text-slate-700 text-xs font-semibold rounded-xl hover:bg-sand-200 transition-all active:scale-95"
+            >
+              <Phone className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaceCarousel({ places, onSelect }: { places: TobagoPlace[]; onSelect?: (place: TobagoPlace) => void }) {
+  return (
+    <div className="flex items-end gap-3 animate-message-appear">
+      <EmmaAvatar size="sm" />
+      <div className="flex-1 overflow-hidden">
+        <div className="flex gap-3 overflow-x-auto pb-2 -mb-2 scrollbar-hide" style={{ scrollSnapType: 'x mandatory' }}>
+          {places.map((place, index) => (
+            <div key={place.id} style={{ scrollSnapAlign: 'start', animationDelay: `${index * 100}ms` }} className="animate-fade-in">
+              <PlaceCard place={place} onSelect={onSelect} />
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-center gap-1.5 mt-2">
+          {places.map((_, i) => (
+            <div key={i} className="w-1.5 h-1.5 rounded-full bg-coral/30" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message, onPlaceSelect }: { message: Message; onPlaceSelect?: (place: TobagoPlace) => void }) {
   const isEmma = message.type === 'emma';
   const isUser = message.type === 'user';
   const isCelebration = message.type === 'celebration';
   const isTip = message.type === 'tip';
   const isGif = message.type === 'gif';
+  const isPlaces = message.type === 'places';
   const [showReaction, setShowReaction] = useState(false);
 
   useEffect(() => {
@@ -694,6 +836,10 @@ function MessageBubble({ message }: { message: Message }) {
 
   if (isGif && message.gifUrl) {
     return <GifMessage url={message.gifUrl} title={message.content} />;
+  }
+
+  if (isPlaces && message.places && message.places.length > 0) {
+    return <PlaceCarousel places={message.places} onSelect={onPlaceSelect} />;
   }
 
   if (isTip) {
@@ -1425,6 +1571,21 @@ export default function EmmaChat() {
       
       setIsTyping(true);
       
+      // Check if this is a recommendation request
+      const lowerInput = userInput.toLowerCase();
+      const isRecommendationRequest = 
+        lowerInput.includes('eat') || 
+        lowerInput.includes('food') || 
+        lowerInput.includes('restaurant') ||
+        lowerInput.includes('beach') ||
+        lowerInput.includes('do') ||
+        lowerInput.includes('activity') ||
+        lowerInput.includes('recommend') ||
+        lowerInput.includes('suggestion') ||
+        lowerInput.includes('where should') ||
+        lowerInput.includes('what should') ||
+        lowerInput.includes('places to');
+      
       try {
         // Call the AI chat endpoint for intelligent responses
         const response = await fetch('/api/emma/chat', {
@@ -1445,7 +1606,37 @@ export default function EmmaChat() {
         if (!response.ok) throw new Error('Chat failed');
         
         const data = await response.json();
-        await addEmmaMessages([data.response], 'free_chat', data.gif_type);
+        
+        // Show Emma's intro message first
+        await addEmmaMessages([data.response], undefined, data.gif_type);
+        
+        // If this was a recommendation request, show place cards
+        if (isRecommendationRequest) {
+          const places = getRecommendations(userInput);
+          if (places.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 600));
+            setIsTyping(true);
+            await new Promise(resolve => setTimeout(resolve, 400));
+            
+            // Add place cards
+            const placesMessage: Message = {
+              id: `places-${Date.now()}`,
+              type: 'places',
+              content: 'Here are my top picks:',
+              timestamp: new Date(),
+              animate: true,
+              places: places,
+            };
+            setMessages(prev => [...prev, placesMessage]);
+            setIsTyping(false);
+            
+            // Follow up message
+            await new Promise(resolve => setTimeout(resolve, 800));
+            await addEmmaMessages(["Swipe to see more! Tap any card for directions. 👆"], 'free_chat');
+          }
+        }
+        
+        setCurrentStep('free_chat');
       } catch (error) {
         console.error('AI chat error:', error);
         // Fallback to simple response if AI fails
@@ -1722,7 +1913,20 @@ export default function EmmaChat() {
         </div>
 
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble 
+            key={message.id} 
+            message={message} 
+            onPlaceSelect={(place) => {
+              // When a place is selected, Emma comments on it
+              const comments = [
+                `${place.name} is a great choice! 🌟`,
+                `Oh I love ${place.name}! You'll have a great time.`,
+                `Excellent pick! ${place.emmaNote}`,
+              ];
+              const comment = comments[Math.floor(Math.random() * comments.length)];
+              addEmmaMessages([comment], 'free_chat');
+            }}
+          />
         ))}
 
         {isTyping && <TypingIndicator />}
