@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle, RefreshCcw, MessageCircle, MapPin, HelpCircle, ExternalLink, Phone, Navigation, Clock } from 'lucide-react';
+import { Send, Plane, Ship, Waves, Sparkles, Heart, Sun, Star, Check, CheckCheck, ChevronRight, PartyPopper, TreePalm, Umbrella, Music, Camera, Utensils, Mail, AlertCircle, RefreshCcw, MessageCircle, MapPin, HelpCircle, ExternalLink, Phone, Navigation, Clock, UserCheck, UserX } from 'lucide-react';
 import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from '@/lib/tobago-places';
 
 // ============================================
@@ -10,7 +10,7 @@ import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from
 
 type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back';
 type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'cool_name' | 'thank_you' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back';
-type SurveyStep = 'splash' | 'loading' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
+type SurveyStep = 'splash' | 'loading' | 'confirm_identity' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
 
 interface AIContext {
   name?: string;
@@ -115,6 +115,22 @@ const EMMA_AVATAR_URL = 'https://images.unsplash.com/photo-1531123897727-8f129e1
 function isValidEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
+}
+
+/**
+ * Split AI response into at most 2 message chunks so it feels natural (not a flood of bubbles).
+ * Uses double newline for paragraph break; if more than 2 parts, combines into 2.
+ */
+function splitResponseIntoMessages(text: string): string[] {
+  if (!text || !text.trim()) return [];
+  const trimmed = text.trim();
+  const parts = trimmed.split(/\n\n+/).map(s => s.trim()).filter(Boolean);
+  if (parts.length === 0) return [trimmed];
+  if (parts.length === 1) return [parts[0]];
+  // Max 2 messages: first part, then rest combined
+  const first = parts[0];
+  const second = parts.slice(1).join(' ');
+  return [first, second];
 }
 
 function extractName(input: string): string {
@@ -367,6 +383,15 @@ function storeUserId(userId: string): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem('emma_user_id', userId);
+  } catch {
+    // Ignore
+  }
+}
+
+function clearStoredUserId(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem('emma_user_id');
   } catch {
     // Ignore
   }
@@ -879,7 +904,7 @@ function MessageBubble({ message, onPlaceSelect }: { message: Message; onPlaceSe
             }`}
             style={{ maxWidth: '75vw' }}
           >
-            <p className={`text-[15px] leading-snug ${isUser ? 'text-white' : 'text-slate-700'}`}>
+            <p className={`text-[15px] leading-snug whitespace-pre-line ${isUser ? 'text-white' : 'text-slate-700'}`}>
               {message.content}
             </p>
           </div>
@@ -1111,6 +1136,62 @@ function ActivitySelector({ options, onSelect, disabled }: {
   );
 }
 
+// "Is that you?" precursor – same style as main menu (avatar, prompt, card grid)
+function ConfirmIdentitySelector({ name, onConfirm, disabled }: {
+  name: string;
+  onConfirm: (isYes: boolean) => void;
+  disabled: boolean;
+}) {
+  const [picked, setPicked] = useState<boolean | null>(null);
+
+  const handle = (isYes: boolean) => {
+    if (disabled || picked !== null) return;
+    setPicked(isYes);
+    onConfirm(isYes);
+  };
+
+  return (
+    <div className="flex items-end gap-3 animate-message-appear">
+      <EmmaAvatar />
+      <div className="flex-1 max-w-[85%]">
+        <div className="bg-white rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm border border-sand-200 mb-3">
+          <p className="text-[15px] text-slate-700">Is that you, or someone else?</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => handle(true)}
+            disabled={disabled || picked !== null}
+            className="group relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-all duration-300 animate-fade-in overflow-hidden bg-white border-2 border-sand-200 hover:border-transparent hover:shadow-xl hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-emerald-400 to-teal-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <div className="relative z-10 w-12 h-12 rounded-full flex items-center justify-center bg-gradient-to-br from-emerald-400 to-teal-500 group-hover:bg-white/20">
+              <UserCheck className="w-6 h-6 text-white" />
+            </div>
+            <span className="relative z-10 text-sm font-semibold text-slate-700 group-hover:text-white transition-colors">
+              Yes, it&apos;s me
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handle(false)}
+            disabled={disabled || picked !== null}
+            className="group relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-all duration-300 animate-fade-in overflow-hidden bg-white border-2 border-sand-200 hover:border-transparent hover:shadow-xl hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-slate-400 to-slate-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <div className="relative z-10 w-12 h-12 rounded-full flex items-center justify-center bg-gradient-to-br from-slate-400 to-slate-500 group-hover:bg-white/20">
+              <UserX className="w-6 h-6 text-white" />
+            </div>
+            <span className="relative z-10 text-sm font-semibold text-slate-700 group-hover:text-white transition-colors">
+              No, someone else
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Main Menu Selector for returning users
 function MainMenuSelector({ options, onSelect, disabled }: { 
   options: MainMenuOption[]; 
@@ -1324,10 +1405,12 @@ export default function EmmaChat() {
     contents: string[], 
     nextStep?: SurveyStep,
     gifType?: GifType,
-    gifFirst?: boolean
+    gifFirst?: boolean,
+    options?: { delayBetweenMs?: number }
   ) => {
     setIsTyping(true);
-    
+    const delayMs = options?.delayBetweenMs ?? 700 + Math.random() * 300;
+
     const validContents = contents.filter(c => c && c.trim().length > 2);
     
     if (gifFirst && gifType) {
@@ -1361,7 +1444,7 @@ export default function EmmaChat() {
     }
     
     for (let i = 0; i < validContents.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 700 + Math.random() * 300));
+      await new Promise(resolve => setTimeout(resolve, delayMs));
       
       const newMessage: Message = {
         id: `emma-${Date.now()}-${i}`,
@@ -1396,7 +1479,7 @@ export default function EmmaChat() {
       
       if (i < validContents.length - 1) {
         setIsTyping(true);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, Math.min(400, delayMs * 0.6)));
       }
     }
     
@@ -1444,23 +1527,12 @@ export default function EmmaChat() {
         setUserEmail(result.user.email);
         storeUserId(result.user.id);
         
-        // Create conversation linked to user
-        await createConversation(sessionToken, result.user.id);
-        
-        setCurrentStep('welcome_back');
-        
-        // Welcome back flow
+        // Precursor: ask "Is that you [Name]?" before assuming identity
+        setCurrentStep('confirm_identity');
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        const welcomeMsg = EMMA_MESSAGES.welcomeBack(
-          result.user.name,
-          result.user.visit_count,
-          result.user.last_seen_at
-        );
-        const followUp = EMMA_MESSAGES.welcomeBackFollowUp(result.user.last_seen_at);
-        
-        await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
-        
+        const confirmMsg = `Is that you, ${result.user.name}?`;
+        await addEmmaMessages([confirmMsg], undefined);
+        // Stay on confirm_identity; user taps Yes or No below
       } else {
         // New user flow
         await createConversation(sessionToken);
@@ -1478,6 +1550,50 @@ export default function EmmaChat() {
       await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
     }
   }, [browserFingerprint, sessionToken, addEmmaMessages]);
+
+  // "Is that you?" precursor – Yes → welcome back, No → new user flow
+  const handleConfirmIdentity = useCallback(async (isYes: boolean) => {
+    const reply = isYes ? "Yes, it's me" : "No, someone else";
+    setMessages(prev => [...prev, {
+      id: `user-${Date.now()}`,
+      type: 'user',
+      content: reply,
+      timestamp: new Date(),
+      animate: true,
+      delivered: true,
+      read: true,
+    }]);
+    if (sessionToken) saveMessageToDb(sessionToken, 'user', reply);
+
+    if (isYes && currentUser) {
+      await createConversation(sessionToken, currentUser.id);
+      const welcomeMsg = EMMA_MESSAGES.welcomeBack(currentUser.name, currentUser.visit_count, currentUser.last_seen_at);
+      const followUp = EMMA_MESSAGES.welcomeBackFollowUp(currentUser.last_seen_at);
+      await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
+    } else {
+      // Unlink this device from the previous user so Emma treats this session as a new person
+      if (browserFingerprint) {
+        try {
+          await fetch('/api/emma/user/forget-device', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ browser_fingerprint: browserFingerprint }),
+          });
+        } catch (e) {
+          console.error('Forget device failed:', e);
+        }
+      }
+      setCurrentUser(null);
+      setIsReturningUser(false);
+      setUserName('');
+      setUserEmail('');
+      clearStoredUserId();
+      await createConversation(sessionToken);
+      setCurrentStep('welcome');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+    }
+  }, [sessionToken, currentUser, addEmmaMessages, browserFingerprint]);
 
   // Scroll on new messages
   useEffect(() => {
@@ -1607,8 +1723,10 @@ export default function EmmaChat() {
         
         const data = await response.json();
         
-        // Show Emma's intro message first
-        await addEmmaMessages([data.response], undefined, data.gif_type);
+        // At most 2 messages, with a natural pause between them (like someone typing then sending again)
+        const chunks = splitResponseIntoMessages(data.response);
+        const typingDelayMs = 650 + Math.random() * 250; // ~650–900ms between the 2 messages
+        await addEmmaMessages(chunks, undefined, data.gif_type, false, { delayBetweenMs: typingDelayMs });
         
         // If this was a recommendation request, show place cards
         if (isRecommendationRequest) {
@@ -1848,6 +1966,7 @@ export default function EmmaChat() {
     currentStep === 'welcome' ||
     currentStep === 'welcome_back' ||
     currentStep === 'main_menu' ||
+    currentStep === 'confirm_identity' ||
     currentStep === 'splash' ||
     currentStep === 'loading';
 
@@ -1930,6 +2049,15 @@ export default function EmmaChat() {
         ))}
 
         {isTyping && <TypingIndicator />}
+
+        {/* "Is that you?" precursor – same style as main menu */}
+        {currentStep === 'confirm_identity' && !isTyping && (
+          <ConfirmIdentitySelector
+            name={userName}
+            onConfirm={handleConfirmIdentity}
+            disabled={isTyping}
+          />
+        )}
 
         {/* Conditional UI elements */}
         {currentStep === 'main_menu' && !isTyping && (

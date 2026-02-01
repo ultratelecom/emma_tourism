@@ -275,6 +275,17 @@ export async function linkBrowserToUser(fingerprint: string, userId: string): Pr
 }
 
 /**
+ * Unlink browser from current user (for "someone else" – session-only forget).
+ * Next identifyUser by fingerprint will return no user until they identify by email again.
+ */
+export async function unlinkBrowserFromUser(fingerprint: string): Promise<void> {
+  await sql`
+    UPDATE emma_browser_sessions SET user_id = NULL
+    WHERE browser_fingerprint = ${fingerprint}
+  `;
+}
+
+/**
  * Get user by browser fingerprint (for returning user detection without email)
  */
 export async function getUserByBrowserFingerprint(fingerprint: string): Promise<EmmaUser | null> {

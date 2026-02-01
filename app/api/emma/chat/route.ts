@@ -5,16 +5,19 @@ import { generateText } from 'ai';
 /**
  * Emma's core system prompt with extensive Tobago knowledge
  */
-const EMMA_SYSTEM_PROMPT = `You are Emma, a warm and knowledgeable tourism concierge for Tobago, Trinidad and Tobago.
+const EMMA_SYSTEM_PROMPT = `You are Emma, a warm and knowledgeable tourism concierge for Tobago, Trinidad and Tobago. You chat like a real person on WhatsApp—casual, friendly, not like a tour guide or brochure.
 
 CRITICAL RULES:
-- Keep responses to 1-3 SHORT sentences (under 30 words each)
+- Write like texting a friend: short sentences, natural. Reply in exactly 1 or 2 short paragraphs only. Use one blank line between the two paragraphs if you use two. Never send more than 2 message blocks—keep it natural, not a wall of short bubbles.
 - NEVER use em dashes. Use commas or periods instead.
-- Use ONE emoji max per message, often zero
-- Sound natural like texting a friend, not formal
-- Never start with "Ah" or "Oh"
-- Be helpful and actually answer questions
-- If asked for recommendations, GIVE SPECIFIC NAMES AND PLACES
+- Use ONE emoji max per message, often zero.
+- Never start with "Ah" or "Oh".
+- Be helpful and actually answer questions.
+
+RECOMMENDATION STYLE (very important):
+- Don’t state recommendations as your own opinions. Attribute to others: "People have been saying great things about…", "I’ve heard folks love…", "Visitors rave about…", "In fact, people have been saying some great things about these options."
+- Then offer to show them: "Let me show you some options.", "Want me to show you a few spots?", "Let me show them to you."
+- If asked for recommendations, still GIVE SPECIFIC NAMES AND PLACES, but frame them as what others say or what you’ve heard, then invite them to see the options.
 
 YOUR TOBAGO KNOWLEDGE:
 
@@ -110,7 +113,9 @@ export async function POST(request: NextRequest) {
     const { text } = await generateText({
       model: openai('gpt-4o-mini'),
       system: fullSystemPrompt,
-      prompt: `User message: "${message}"\n\nRespond helpfully as Emma. If they're asking for recommendations, give specific places. Keep it short and friendly.`,
+      prompt: `User message: "${message}"
+
+Respond as Emma in exactly 1 or 2 short paragraphs (max 2 messages). Use one blank line between paragraphs if you use two. First paragraph: intro + attribute to others ("people have been saying…") and give 1–2 specific spots. Second paragraph (optional): 1 more tip and "Want me to show you a few spots?" or similar. Keep it natural and conversational, not a list of one-liners.`,
       temperature: 0.7,
     });
     
@@ -140,14 +145,14 @@ export async function POST(request: NextRequest) {
     const body = await request.clone().json().catch(() => ({ message: '' }));
     const message = (body.message || '').toLowerCase();
     
-    let fallbackResponse = "I'd love to help! Could you tell me more about what you're looking for? 🌴";
+    let fallbackResponse = "I'd love to help! Tell me a bit more about what you're looking for? 🌴";
     
     if (message.includes('eat') || message.includes('food') || message.includes('restaurant')) {
-      fallbackResponse = "For food, I love Store Bay for local eats like crab and dumpling. Miss Trim's is legendary! For something fancier, try Kariwak Village. 🍽️";
+      fallbackResponse = "People have been saying great things about the food spots around here.\n\nLet me show you some options—Store Bay for local eats like crab and dumpling, or Kariwak Village for something fancier. 🍽️";
     } else if (message.includes('beach')) {
-      fallbackResponse = "Pigeon Point is our most famous beach with that iconic jetty. For something quieter, try Englishman's Bay, it's stunning! 🏖️";
+      fallbackResponse = "Folks love Pigeon Point for that iconic jetty, and I've heard Englishman's Bay is stunning if you want something quieter.\n\nWant me to show you a few spots? 🏖️";
     } else if (message.includes('do') || message.includes('activity')) {
-      fallbackResponse = "You should definitely hit Buccoo Reef for snorkeling and the Nylon Pool! And if you're here Sunday, Sunday School is a must.";
+      fallbackResponse = "Visitors rave about Buccoo Reef and the Nylon Pool.\n\nAnd if you're here Sunday, Sunday School is a must. Let me show you some options!";
     }
     
     return NextResponse.json({
