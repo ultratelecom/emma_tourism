@@ -8,8 +8,8 @@ import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from
 // TYPES & INTERFACES
 // ============================================
 
-type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back';
-type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'cool_name' | 'thank_you' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back';
+type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back' | 'transition_bridge';
+type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back' | 'diving' | 'nature' | 'empathy' | 'celebration' | 'local_vibes';
 type SurveyStep = 'splash' | 'loading' | 'confirm_identity' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
 
 interface AIContext {
@@ -21,6 +21,9 @@ interface AIContext {
   isReturningUser?: boolean;
   visitCount?: number;
   lastRating?: { place: string; rating: number };
+  userContextSummary?: string;
+  fromStep?: string;
+  toStep?: string;
 }
 
 interface GifData {
@@ -197,9 +200,9 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, context }),
     });
-    
+
     if (!response.ok) throw new Error('AI response failed');
-    
+
     const data = await response.json();
     return data.response;
   } catch (error) {
@@ -207,14 +210,22 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
     const fallbacks: Record<AIResponseType, string> = {
       name_reaction: `Nice to meet you, ${context.name}!`,
       email_thanks: "Got it, thanks!",
-      arrival_reaction: "What a wonderful way to arrive in paradise! 🏝️",
-      rating_reaction: "Thanks for sharing! Tobago is about to amaze you! 🌴",
+      arrival_reaction: "What a wonderful way to arrive in paradise!",
+      rating_reaction: "Thanks for sharing! Tobago is about to amaze you!",
       activity_tip: "You're going to love exploring our beautiful island!",
-      farewell: "Have the most incredible time in Tobago! 🌺",
-      welcome_back: `${context.name}! So good to see you again! 🌴`,
+      farewell: "Have the most incredible time in Tobago!",
+      welcome_back: `${context.name}! So good to see you again!`,
+      transition_bridge: '',
     };
     return fallbacks[type];
   }
+}
+
+async function getEmmaAIResponseWithTimeout(type: AIResponseType, context: AIContext, timeoutMs = 4000): Promise<string> {
+  return Promise.race([
+    getEmmaAIResponse(type, context),
+    new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
+  ]);
 }
 
 async function identifyUser(fingerprint: string, email?: string, name?: string): Promise<{
@@ -1372,6 +1383,7 @@ export default function EmmaChat() {
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [sessionToken, setSessionToken] = useState<string>('');
   const [browserFingerprint, setBrowserFingerprint] = useState<string>('');
+  const [userContext, setUserContext] = useState<string>('');
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1526,7 +1538,8 @@ export default function EmmaChat() {
         setUserName(result.user.name);
         setUserEmail(result.user.email);
         storeUserId(result.user.id);
-        
+        if (result.context) setUserContext(result.context);
+
         // Precursor: ask "Is that you [Name]?" before assuming identity
         setCurrentStep('confirm_identity');
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -1567,7 +1580,16 @@ export default function EmmaChat() {
 
     if (isYes && currentUser) {
       await createConversation(sessionToken, currentUser.id);
-      const welcomeMsg = EMMA_MESSAGES.welcomeBack(currentUser.name, currentUser.visit_count, currentUser.last_seen_at);
+      let welcomeMsg: string;
+      try {
+        welcomeMsg = await getEmmaAIResponseWithTimeout('welcome_back', {
+          name: currentUser.name,
+          visitCount: currentUser.visit_count,
+          userContextSummary: userContext || undefined,
+        });
+      } catch {
+        welcomeMsg = EMMA_MESSAGES.welcomeBack(currentUser.name, currentUser.visit_count, currentUser.last_seen_at);
+      }
       const followUp = EMMA_MESSAGES.welcomeBackFollowUp(currentUser.last_seen_at);
       await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
     } else {
@@ -1638,12 +1660,29 @@ export default function EmmaChat() {
     if (currentStep === 'name') {
       const extractedName = extractName(userInput);
       setUserName(extractedName);
-      
+
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-      
+
       await new Promise(resolve => setTimeout(resolve, 600));
-      const nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
-      await addEmmaMessages([nameReaction, EMMA_MESSAGES.askEmail], 'email', 'cool_name', true);
+      let nameReaction: string;
+      try {
+        nameReaction = await getEmmaAIResponseWithTimeout('name_reaction', { name: extractedName });
+      } catch {
+        nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
+      }
+      // Try to add a natural bridge to the email ask
+      let emailAsk = EMMA_MESSAGES.askEmail;
+      try {
+        const bridge = await getEmmaAIResponseWithTimeout('transition_bridge', {
+          name: extractedName,
+          fromStep: 'learning their name',
+          toStep: 'asking for their email so you can send them local tips',
+        }, 3000);
+        if (bridge) emailAsk = bridge + ' ' + EMMA_MESSAGES.askEmail;
+      } catch {
+        // Use default email ask without bridge
+      }
+      await addEmmaMessages([nameReaction, emailAsk], 'email', 'name_reaction', true);
       
     } else if (currentStep === 'email') {
       setUserEmail(userInput);
@@ -1657,14 +1696,23 @@ export default function EmmaChat() {
           setCurrentUser(result.user);
           setIsReturningUser(true);
           storeUserId(result.user.id);
-          
+          if (result.context) setUserContext(result.context);
+
           setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-          
+
           await new Promise(resolve => setTimeout(resolve, 600));
-          await addEmmaMessages([
-            `Wait... ${result.user.name}! I remember you! 🎉`,
-            `You came back! This is visit #${result.user.visit_count}!`
-          ], 'main_menu', 'welcome_back', true);
+          let welcomeMsg: string;
+          try {
+            welcomeMsg = await getEmmaAIResponseWithTimeout('welcome_back', {
+              name: result.user.name,
+              visitCount: result.user.visit_count,
+              userContextSummary: result.context || undefined,
+            });
+          } catch {
+            welcomeMsg = `Wait... ${result.user.name}! I remember you!`;
+          }
+          const followUp = `You came back! This is visit #${result.user.visit_count}!`;
+          await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
           
           return;
         } else if (result.user) {
@@ -1677,9 +1725,15 @@ export default function EmmaChat() {
       }
       
       setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-      
+
       await new Promise(resolve => setTimeout(resolve, 600));
-      await addEmmaMessages([EMMA_MESSAGES.emailResponse, EMMA_MESSAGES.askArrival], 'arrival', 'thank_you', true);
+      let emailReaction: string;
+      try {
+        emailReaction = await getEmmaAIResponseWithTimeout('email_thanks', { name: userName });
+      } catch {
+        emailReaction = EMMA_MESSAGES.emailResponse;
+      }
+      await addEmmaMessages([emailReaction, EMMA_MESSAGES.askArrival], 'arrival', 'thanks', true);
       
     } else if (currentStep === 'free_chat' || currentStep === 'rating_flow') {
       // Free chat mode - use REAL AI
@@ -1712,6 +1766,7 @@ export default function EmmaChat() {
             user_name: userName,
             user_id: currentUser?.id,
             session_token: sessionToken,
+            user_context: userContext || undefined,
             conversation_history: messages.slice(-10).map(m => ({
               role: m.type === 'user' ? 'user' : 'assistant',
               content: m.content,
@@ -1792,7 +1847,12 @@ export default function EmmaChat() {
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
 
     await new Promise(resolve => setTimeout(resolve, 600));
-    const arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
+    let arrivalReaction: string;
+    try {
+      arrivalReaction = await getEmmaAIResponseWithTimeout('arrival_reaction', { name: userName, arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' });
+    } catch {
+      arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
+    }
     await addEmmaMessages([arrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType, true);
   };
 
@@ -1822,9 +1882,14 @@ export default function EmmaChat() {
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
     
     const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
-    
+
     await new Promise(resolve => setTimeout(resolve, 600));
-    const ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
+    let ratingReaction: string;
+    try {
+      ratingReaction = await getEmmaAIResponseWithTimeout('rating_reaction', { name: userName, rating });
+    } catch {
+      ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
+    }
     await addEmmaMessages([ratingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType, true);
   };
 
@@ -1853,10 +1918,21 @@ export default function EmmaChat() {
     }
     
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
-    
+
     await new Promise(resolve => setTimeout(resolve, 600));
-    const activityReaction = EMMA_MESSAGES.activityResponse(activityId);
-    await addEmmaMessages([activityReaction, `Have an amazing time, ${userName}! 🌴`], 'complete', activityId as GifType, true);
+    let activityReaction: string;
+    try {
+      activityReaction = await getEmmaAIResponseWithTimeout('activity_tip', { name: userName, activity: activityId as AIContext['activity'] });
+    } catch {
+      activityReaction = EMMA_MESSAGES.activityResponse(activityId);
+    }
+    let farewellMsg: string;
+    try {
+      farewellMsg = await getEmmaAIResponseWithTimeout('farewell', { name: userName, activity: activityId as AIContext['activity'], arrivalMethod: userArrival as AIContext['arrivalMethod'] });
+    } catch {
+      farewellMsg = `Have an amazing time, ${userName}!`;
+    }
+    await addEmmaMessages([activityReaction, farewellMsg], 'complete', activityId as GifType, true);
     
     setShowConfetti(true);
     setTimeout(() => setShowConfetti(false), 4000);
@@ -1915,33 +1991,33 @@ export default function EmmaChat() {
       case 'rate':
         await new Promise(resolve => setTimeout(resolve, 600));
         await addEmmaMessages([
-          "Let's hear about your experience! 🌟",
+          "I want to hear about your experience!",
           "What did you check out? A restaurant, beach, activity...?"
-        ], 'rating_flow', 'excited', true);
+        ], 'rating_flow', 'local_vibes', true);
         break;
-        
+
       case 'recommend':
         await new Promise(resolve => setTimeout(resolve, 600));
         await addEmmaMessages([
-          "I love helping with recommendations! 🗺️",
+          "I've got some real good spots for you.",
           "What are you in the mood for today?"
         ], 'activities', 'excited', true);
         break;
-        
+
       case 'chat':
         await new Promise(resolve => setTimeout(resolve, 600));
         await addEmmaMessages([
-          "I'm all ears! 💬",
-          "What's on your mind? How's your Tobago adventure going?"
-        ], 'free_chat', 'excited', true);
+          "I'm all ears!",
+          "What's on your mind? How's Tobago treating you?"
+        ], 'free_chat', 'local_vibes', true);
         break;
-        
+
       case 'help':
         await new Promise(resolve => setTimeout(resolve, 600));
         await addEmmaMessages([
-          "I'm here to help! 🆘",
+          "I'm here to help.",
           "What do you need? Directions, emergency info, recommendations?"
-        ], 'free_chat', 'excited', true);
+        ], 'free_chat', 'empathy', true);
         break;
     }
   };
