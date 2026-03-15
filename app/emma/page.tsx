@@ -8,7 +8,7 @@ import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from
 // TYPES & INTERFACES
 // ============================================
 
-type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back' | 'transition_bridge';
+type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back' | 'welcome_intro' | 'ask_email' | 'ask_arrival' | 'ask_rating' | 'ask_activities' | 'menu_response';
 type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back' | 'diving' | 'nature' | 'empathy' | 'celebration' | 'local_vibes';
 type SurveyStep = 'splash' | 'loading' | 'confirm_identity' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
 
@@ -22,8 +22,7 @@ interface AIContext {
   visitCount?: number;
   lastRating?: { place: string; rating: number };
   userContextSummary?: string;
-  fromStep?: string;
-  toStep?: string;
+  menuChoice?: 'rate' | 'recommend' | 'chat' | 'help';
 }
 
 interface GifData {
@@ -209,13 +208,18 @@ async function getEmmaAIResponse(type: AIResponseType, context: AIContext): Prom
     console.error('AI response error:', error);
     const fallbacks: Record<AIResponseType, string> = {
       name_reaction: `Nice to meet you, ${context.name}!`,
-      email_thanks: "Got it, thanks!",
-      arrival_reaction: "What a wonderful way to arrive in paradise!",
-      rating_reaction: "Thanks for sharing! Tobago is about to amaze you!",
-      activity_tip: "You're going to love exploring our beautiful island!",
-      farewell: "Have the most incredible time in Tobago!",
-      welcome_back: `${context.name}! So good to see you again!`,
-      transition_bridge: '',
+      email_thanks: "Got it, I'll send you the good stuff.",
+      arrival_reaction: "Welcome to the island!",
+      rating_reaction: "The island will more than make up for it.",
+      activity_tip: "You picked a good one, I have some real spots for you.",
+      farewell: "Go enjoy yourself out there!",
+      welcome_back: `${context.name}! Good to see you again.`,
+      welcome_intro: "Welcome to Tobago! I'm Emma, what's your name?",
+      ask_email: "What's your email? I'll send you some local spots the guidebooks miss.",
+      ask_arrival: "So how did you get here, fly in or take the ferry?",
+      ask_rating: "How was the trip getting here?",
+      ask_activities: "So what are you most looking forward to doing here?",
+      menu_response: "Good to have you back! What's on your mind?",
     };
     return fallbacks[type];
   }
@@ -427,51 +431,51 @@ function getSessionToken(): string {
 // ============================================
 
 const EMMA_MESSAGES = {
-  welcome: ["Hey there! 👋"],
-  intro: "I'm Emma, your Tobago welcome buddy! What's your name?",
-  nameResponse: (name: string) => `${name}! Love that name! 😎`,
-  askEmail: "Drop your email - I'll send you some island tips! 📧",
-  invalidEmail: "Hmm, that doesn't look right - try again?",
-  emailResponse: "Thanks! Good stuff coming your way! 🌴",
-  askArrival: "How did you get to Tobago?",
+  welcome: ["Welcome to Tobago!"],
+  intro: "I'm Emma, a local here. What's your name?",
+  nameResponse: (name: string) => `Nice to meet you, ${name}.`,
+  askEmail: "What's your email? I'll send you some spots the guidebooks miss.",
+  invalidEmail: "Hmm, that doesn't look right, try again?",
+  emailResponse: "Got it, I'll send you the good stuff.",
+  askArrival: "So how did you get here, fly in or take the ferry?",
   arrivalResponse: (method: string) => {
     const responses: Record<string, string> = {
-      plane: "Flying in! That view though! ✈️",
-      cruise: "Cruise life! Welcome to port! 🚢",
-      ferry: "The ferry! That sea breeze! ⛴️",
+      plane: "That view on the approach is something else.",
+      cruise: "Pulling into Scarborough port is always a moment.",
+      ferry: "That crossing from Trinidad, nothing like it.",
     };
-    return responses[method] || "Welcome!";
+    return responses[method] || "Welcome to the island!";
   },
-  askRating: "How was your journey here?",
+  askRating: "How was the trip getting here?",
   ratingResponse: (rating: number) => {
-    if (rating >= 4) return "Smooth sailing! 🎉";
-    else if (rating >= 3) return "Now the real fun begins! 🌴";
-    else return "Tobago will make up for it! 💪";
+    if (rating >= 4) return "That's what I like to hear.";
+    else if (rating >= 3) return "Not bad, the island will more than make up for it.";
+    else return "Rough start, but trust me, Tobago fixes everything.";
   },
-  askActivities: "What excites you most about Tobago?",
+  askActivities: "So what are you most looking forward to doing here?",
   activityResponse: (activity: string): string => {
     const responses: Record<string, string> = {
-      beach: "Beach lover! Try Pigeon Point! 🏖️",
-      adventure: "Adventurer! Hit the Main Ridge! 🌴",
-      food: "Foodie! Get the crab & dumpling! 🍽️",
-      nightlife: "Party time! Buccoo Sunday School! 🎵",
-      photos: "Photographer! Every corner is a shot! 📸",
+      beach: "You picked the right island. Englishman's Bay will change your life.",
+      adventure: "The Main Ridge rainforest is real, oldest protected in the Western Hemisphere.",
+      food: "Get the crab and dumpling from Miss Trim at Store Bay. Get there early.",
+      nightlife: "Sunday School in Buccoo, get there around 9pm when it really gets going.",
+      photos: "Pigeon Point around 4pm, the light on that jetty is unreal.",
     };
-    return responses[activity] || "Great choice! Have an amazing time!";
+    return responses[activity] || "Great choice, I have some real spots for you.";
   },
   welcomeBack: (name: string, visitCount: number, lastSeen: Date) => {
     const timeAgo = getRelativeTime(lastSeen);
     if (visitCount === 2) {
-      return `${name}! You came back! 🎉`;
+      return `${name}! You're back, good to see you again.`;
     } else if (visitCount <= 5) {
-      return `${name}! Visit #${visitCount}! You must love it here! 💕`;
+      return `${name}, visit number ${visitCount}. You're becoming a regular.`;
     } else {
-      return `${name}! My favorite regular! Welcome back! 🌟`;
+      return `${name}! At this point you're practically a local.`;
     }
   },
   welcomeBackFollowUp: (lastSeen: Date) => {
     const timeAgo = getRelativeTime(lastSeen);
-    return `Last time we chatted was ${timeAgo}. How's Tobago treating you?`;
+    return `Last time we chatted was ${timeAgo}. How's the island treating you?`;
   },
   mainMenuPrompt: "What brings you here today?",
 };
@@ -1550,9 +1554,16 @@ export default function EmmaChat() {
         // New user flow
         await createConversation(sessionToken);
         setCurrentStep('welcome');
-        
+
         await new Promise(resolve => setTimeout(resolve, 300));
-        await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+        let intro: string;
+        try {
+          intro = await getEmmaAIResponseWithTimeout('welcome_intro', {});
+        } catch {
+          intro = EMMA_MESSAGES.welcome[0] + '\n\n' + EMMA_MESSAGES.intro;
+        }
+        const introChunks = splitResponseIntoMessages(intro);
+        await addEmmaMessages(introChunks, 'name', 'hey_there', true);
       }
     } catch (error) {
       console.error('User check failed:', error);
@@ -1613,7 +1624,14 @@ export default function EmmaChat() {
       await createConversation(sessionToken);
       setCurrentStep('welcome');
       await new Promise(resolve => setTimeout(resolve, 300));
-      await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+      let intro: string;
+      try {
+        intro = await getEmmaAIResponseWithTimeout('welcome_intro', {});
+      } catch {
+        intro = EMMA_MESSAGES.welcome[0] + '\n\n' + EMMA_MESSAGES.intro;
+      }
+      const introChunks = splitResponseIntoMessages(intro);
+      await addEmmaMessages(introChunks, 'name', 'hey_there', true);
     }
   }, [sessionToken, currentUser, addEmmaMessages, browserFingerprint]);
 
@@ -1670,17 +1688,11 @@ export default function EmmaChat() {
       } catch {
         nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
       }
-      // Try to add a natural bridge to the email ask
-      let emailAsk = EMMA_MESSAGES.askEmail;
+      let emailAsk: string;
       try {
-        const bridge = await getEmmaAIResponseWithTimeout('transition_bridge', {
-          name: extractedName,
-          fromStep: 'learning their name',
-          toStep: 'asking for their email so you can send them local tips',
-        }, 3000);
-        if (bridge) emailAsk = bridge + ' ' + EMMA_MESSAGES.askEmail;
+        emailAsk = await getEmmaAIResponseWithTimeout('ask_email', { name: extractedName });
       } catch {
-        // Use default email ask without bridge
+        emailAsk = EMMA_MESSAGES.askEmail;
       }
       await addEmmaMessages([nameReaction, emailAsk], 'email', 'name_reaction', true);
       
@@ -1733,7 +1745,13 @@ export default function EmmaChat() {
       } catch {
         emailReaction = EMMA_MESSAGES.emailResponse;
       }
-      await addEmmaMessages([emailReaction, EMMA_MESSAGES.askArrival], 'arrival', 'thanks', true);
+      let arrivalAsk: string;
+      try {
+        arrivalAsk = await getEmmaAIResponseWithTimeout('ask_arrival', { name: userName });
+      } catch {
+        arrivalAsk = EMMA_MESSAGES.askArrival;
+      }
+      await addEmmaMessages([emailReaction, arrivalAsk], 'arrival', 'thanks', true);
       
     } else if (currentStep === 'free_chat' || currentStep === 'rating_flow') {
       // Free chat mode - use REAL AI
@@ -1853,7 +1871,13 @@ export default function EmmaChat() {
     } catch {
       arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
     }
-    await addEmmaMessages([arrivalReaction, EMMA_MESSAGES.askRating], 'rating', arrivalId as GifType, true);
+    let ratingAsk: string;
+    try {
+      ratingAsk = await getEmmaAIResponseWithTimeout('ask_rating', { name: userName, arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' });
+    } catch {
+      ratingAsk = EMMA_MESSAGES.askRating;
+    }
+    await addEmmaMessages([arrivalReaction, ratingAsk], 'rating', arrivalId as GifType, true);
   };
 
   // Handle rating selection
@@ -1890,7 +1914,13 @@ export default function EmmaChat() {
     } catch {
       ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
     }
-    await addEmmaMessages([ratingReaction, EMMA_MESSAGES.askActivities], 'activities', gifType, true);
+    let activitiesAsk: string;
+    try {
+      activitiesAsk = await getEmmaAIResponseWithTimeout('ask_activities', { name: userName, rating });
+    } catch {
+      activitiesAsk = EMMA_MESSAGES.askActivities;
+    }
+    await addEmmaMessages([ratingReaction, activitiesAsk], 'activities', gifType, true);
   };
 
   // Handle activity selection
@@ -1987,38 +2017,44 @@ export default function EmmaChat() {
 
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
 
-    switch (menuId) {
-      case 'rate':
-        await new Promise(resolve => setTimeout(resolve, 600));
-        await addEmmaMessages([
-          "I want to hear about your experience!",
-          "What did you check out? A restaurant, beach, activity...?"
-        ], 'rating_flow', 'local_vibes', true);
-        break;
+    const menuStepMap: Record<string, SurveyStep> = {
+      rate: 'rating_flow',
+      recommend: 'activities',
+      chat: 'free_chat',
+      help: 'free_chat',
+    };
+    const menuGifMap: Record<string, GifType> = {
+      rate: 'local_vibes',
+      recommend: 'excited',
+      chat: 'local_vibes',
+      help: 'empathy',
+    };
+    const menuFallbacks: Record<string, string[]> = {
+      rate: ["I want to hear about your experience!", "What did you check out? A restaurant, beach, activity...?"],
+      recommend: ["I've got some real good spots for you.", "What are you in the mood for today?"],
+      chat: ["I'm all ears!", "What's on your mind?"],
+      help: ["I'm here to help.", "What do you need?"],
+    };
 
-      case 'recommend':
-        await new Promise(resolve => setTimeout(resolve, 600));
-        await addEmmaMessages([
-          "I've got some real good spots for you.",
-          "What are you in the mood for today?"
-        ], 'activities', 'excited', true);
-        break;
+    await new Promise(resolve => setTimeout(resolve, 600));
+    let menuResponse: string;
+    try {
+      menuResponse = await getEmmaAIResponseWithTimeout('menu_response', {
+        name: userName,
+        menuChoice: menuId as AIContext['menuChoice'],
+        visitCount: currentUser?.visit_count,
+        userContextSummary: userContext || undefined,
+      });
+    } catch {
+      menuResponse = '';
+    }
 
-      case 'chat':
-        await new Promise(resolve => setTimeout(resolve, 600));
-        await addEmmaMessages([
-          "I'm all ears!",
-          "What's on your mind? How's Tobago treating you?"
-        ], 'free_chat', 'local_vibes', true);
-        break;
-
-      case 'help':
-        await new Promise(resolve => setTimeout(resolve, 600));
-        await addEmmaMessages([
-          "I'm here to help.",
-          "What do you need? Directions, emergency info, recommendations?"
-        ], 'free_chat', 'empathy', true);
-        break;
+    if (menuResponse) {
+      const chunks = splitResponseIntoMessages(menuResponse);
+      await addEmmaMessages(chunks, menuStepMap[menuId] || 'free_chat', menuGifMap[menuId] || 'excited', true);
+    } else {
+      const fallback = menuFallbacks[menuId] || menuFallbacks.chat;
+      await addEmmaMessages(fallback, menuStepMap[menuId] || 'free_chat', menuGifMap[menuId] || 'excited', true);
     }
   };
 
