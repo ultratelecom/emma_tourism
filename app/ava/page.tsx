@@ -64,6 +64,7 @@ type GifCue =
   | 'welcome'
   | 'welcome_back'
   | 'hey_there'
+  | 'name_reaction'
   | 'empathy'
   | 'celebration'
   | 'local_vibes'
@@ -246,6 +247,12 @@ export default function AvaPage() {
    * The first beat gets a waving-hand flair — her "hi".
    */
   const stageOpener = useCallback(async (raw: string) => {
+    // Fire a welcome GIF concurrently. It loads in the background while
+    // the first typing indicator pause is running, so it usually arrives
+    // just before Ava's first text beat — setting the warm, lively tone
+    // before she even says a word.
+    void playGif('welcome', (m) => setMessages((prev) => [...prev, m]));
+
     const beats = raw
       .split(/\n\n+/)
       .map((s) => s.trim())

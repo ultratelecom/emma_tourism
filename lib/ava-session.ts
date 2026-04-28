@@ -278,6 +278,219 @@ function cleanShortAnswer(answer: string): string {
   return answer.trim().replace(/[.!?]+$/, '');
 }
 
+// ============================================
+// PERSONALITY: NAME REACTIONS
+// ============================================
+
+const NAME_REACTION_POOL = [
+  'Love that name!',
+  'Oh wow, amazing name.',
+  'I love that name.',
+  "Beautiful name.",
+  "Strong name.",
+  "Oh, what a name!",
+  "Great name.",
+  "That's a name that carries weight.",
+  "Oh nice — that's a real name.",
+  "Biblical name, real name.",
+  "That's a strong one.",
+];
+
+function pickNameReaction(): string {
+  return NAME_REACTION_POOL[Math.floor(Math.random() * NAME_REACTION_POOL.length)];
+}
+
+// ============================================
+// PERSONALITY: LOCATION QUIPS
+// ============================================
+
+// Southern hemisphere countries — their seasons are inverted vs. north.
+const SOUTHERN_HEMISPHERE_KEYS = new Set([
+  'australia', 'new zealand', 'south africa', 'argentina',
+  'brazil', 'chile', 'peru', 'colombia', 'ecuador',
+]);
+
+// Season index: 0 = winter (Dec–Feb NH), 1 = spring (Mar–May NH),
+//               2 = summer (Jun–Aug NH), 3 = fall (Sep–Nov NH).
+// Southern hemisphere countries get this index shifted +2 (mod 4).
+type SeasonQuips = [string, string, string, string];
+
+const LOCATION_QUIPS: Record<string, SeasonQuips> = {
+  canada: [
+    "Cold up there — hope the heating is doing its job.",
+    "Spring finally coming in up there?",
+    "Canada in the summer is really something.",
+    "Beautiful time of year up there.",
+  ],
+  'united states': [
+    "How is it treating you over there?",
+    "Spring in the US — nice time of year.",
+    "Summer in the States, you're getting the best of it.",
+    "Fall in the US is something else.",
+  ],
+  usa: [
+    "How is it treating you over there?",
+    "Spring in the US — nice time of year.",
+    "Summer in the States, you're getting the best of it.",
+    "Fall in the US is something else.",
+  ],
+  'new york': [
+    "New York in the winter is something else entirely.",
+    "Spring in New York — the city must be buzzing right now.",
+    "New York in the summer, nothing like it.",
+    "Fall in New York is gorgeous.",
+  ],
+  brooklyn: [
+    "Brooklyn in winter can be cold cold.",
+    "Brooklyn in spring — the whole neighbourhood must be coming alive.",
+    "Brooklyn in the summer, that heat on the pavement.",
+    "Brooklyn in fall — beautiful season for it.",
+  ],
+  london: [
+    "London in the winter is grey and moody — do you love it or hate it?",
+    "Spring in London is gorgeous, the parks must be beautiful right now.",
+    "London summer — short but everyone makes the most of it!",
+    "Autumn in London — those parks in October must be stunning.",
+  ],
+  uk: [
+    "UK winters, I don't know how you do it!",
+    "Getting a bit of spring sunshine over there?",
+    "UK summer — short but sweet, I hear.",
+    "Autumn in the UK must be beautiful with all those leaves.",
+  ],
+  'united kingdom': [
+    "UK winters, I don't know how you do it!",
+    "Getting a bit of spring sunshine over there?",
+    "UK summer — short but sweet, I hear.",
+    "Autumn in the UK must be beautiful with all those leaves.",
+  ],
+  england: [
+    "England in winter — grey but charming.",
+    "Spring in England — finally getting some sunshine?",
+    "English summer — the barbecues must be out!",
+    "Autumn in England is something special.",
+  ],
+  toronto: [
+    "Toronto in the winter is serious — how are you managing the cold?",
+    "Spring in Toronto, people must be outside the minute the sun shows.",
+    "Toronto summer is beautiful.",
+    "Fall in Toronto must be gorgeous with all those colours.",
+  ],
+  australia: [
+    "Australian summer — the heat must be intense right now!",
+    "Cooling off a bit heading into autumn down there?",
+    "Australian winter — still warmer than most places!",
+    "Spring down under — everything must be blooming.",
+  ],
+  'new zealand': [
+    "New Zealand summer — gorgeous time to be there.",
+    "Autumn in New Zealand — one of the most beautiful places for it.",
+    "New Zealand winter — how cold does it get where you are?",
+    "Spring in New Zealand — must be absolutely beautiful.",
+  ],
+  germany: [
+    "Germany in winter — cold and cozy, I imagine.",
+    "Spring in Germany must be beautiful.",
+    "German summer — do you get out to the countryside?",
+    "Autumn in Germany is beautiful, all that colour.",
+  ],
+  france: [
+    "France in winter — cold but gorgeous, I bet.",
+    "Spring in France — must be looking incredible right now.",
+    "French summer — everything is buzzing over there.",
+    "Autumn in France — beautiful season to be there.",
+  ],
+  paris: [
+    "Paris in winter — cold but still one of the most beautiful cities.",
+    "Paris in spring — oh wow, that must be gorgeous right now.",
+    "Paris in summer — the whole city comes alive.",
+    "Paris in autumn — beautiful season to be there.",
+  ],
+  dubai: [
+    "Dubai right now — cooler season, actually one of the best times to be there!",
+    "Dubai in spring — before the real heat kicks in.",
+    "Dubai summer — that heat is intense. How do you manage it?",
+    "Dubai in autumn — starting to cool down a bit, right?",
+  ],
+  netherlands: [
+    "Netherlands in winter — cycling in the cold, respect.",
+    "Spring in the Netherlands — tulip season, must be incredible!",
+    "Dutch summer — making the most of every sunny day, I imagine.",
+    "Autumn in the Netherlands is beautiful.",
+  ],
+  amsterdam: [
+    "Amsterdam in winter — cold but alive.",
+    "Spring in Amsterdam — the canals and the flowers must be something else.",
+    "Amsterdam in summer is magical, I hear.",
+    "Autumn in Amsterdam, beautiful.",
+  ],
+  sweden: [
+    "Sweden in winter — serious cold and serious darkness, respect.",
+    "Swedish spring — after that winter, every sunny day must feel like a gift.",
+    "Swedish summer, the long days — must be incredible.",
+    "Autumn in Sweden must be gorgeous.",
+  ],
+  norway: [
+    "Norway in winter — the Northern Lights must be something.",
+    "Norwegian spring — finally coming out of the long night.",
+    "Norwegian summer with those endless days.",
+    "Autumn in Norway — beautiful with all the colours.",
+  ],
+  ireland: [
+    "Ireland in winter — lots of rain but cosy indoors?",
+    "Irish spring — getting a bit of sunshine finally?",
+    "Irish summer — short but everyone makes the most of it.",
+    "Autumn in Ireland is genuinely beautiful.",
+  ],
+  japan: [
+    "Japan in winter — do you get snow where you are?",
+    "Spring in Japan — cherry blossom season! Are you catching any of it?",
+    "Japanese summer — hot and humid, but the festivals must be amazing.",
+    "Autumn in Japan — the fall colours must be incredible.",
+  ],
+  trinidad: [
+    "Trinidad — practically next door! How is the vibe on the island?",
+    "T&T in spring — Carnival just passed, the island must be recovering!",
+    "Trinidad in the summer — the heat and the rain.",
+    "T&T in the autumn — drying out a bit?",
+  ],
+  'trinidad and tobago': [
+    "Right in the Caribbean heat! How is home feeling?",
+    "Carnival season just passed — the island must be winding down.",
+    "T&T in the summer — rainy season coming in.",
+    "T&T in the autumn — drying out a bit?",
+  ],
+};
+
+/**
+ * Get a seasonal/cultural quip for the given location string.
+ * Returns null if no known match.
+ */
+function getLocationQuip(place: string): string | null {
+  if (!place) return null;
+  const lower = place.toLowerCase().trim();
+
+  // Month → season index (northern hemisphere baseline)
+  const month = new Date().getMonth(); // 0–11
+  let seasonIdx: 0 | 1 | 2 | 3;
+  if (month <= 1 || month === 11) seasonIdx = 0;      // Dec–Feb
+  else if (month <= 4) seasonIdx = 1;                 // Mar–May
+  else if (month <= 7) seasonIdx = 2;                 // Jun–Aug
+  else seasonIdx = 3;                                 // Sep–Nov
+
+  const keys = Object.keys(LOCATION_QUIPS);
+  for (const key of keys) {
+    if (lower === key || lower.includes(key) || key.includes(lower)) {
+      const quips = LOCATION_QUIPS[key];
+      if (SOUTHERN_HEMISPHERE_KEYS.has(key)) {
+        seasonIdx = ((seasonIdx + 2) % 4) as 0 | 1 | 2 | 3;
+      }
+      return quips[seasonIdx];
+    }
+  }
+  return null;
+}
+
 function fastReplyForTurnPlan(
   turnPlan: AvaTurnPlan,
   userName: string,
@@ -299,9 +512,12 @@ function fastReplyForTurnPlan(
     }
     if (turnPlan.next_best_question_focus === 'their Tobago roots / generation') {
       const place = turnPlan.specifics_to_name[0] ?? answer;
-      return `${place}, got you. How far back does Tobago go for you, were you born there or is it parents/grandparents?`;
+      const quip = getLocationQuip(place);
+      const locReaction = quip ?? `${place}, got it.`;
+      return `${locReaction} How far back does your Tobago side go — were you born there or is it parents, grandparents?`;
     }
-    return `${firstName(userName)}, got you. Where in the world are you these days?`;
+    const nameReaction = pickNameReaction();
+    return `${nameReaction} Where are you based — what part of the world are you in?`;
   }
   if (turnPlan.reply_shape === 'recover_to_profile_ask') {
     switch (turnPlan.next_best_question_focus) {

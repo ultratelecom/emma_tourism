@@ -51,7 +51,6 @@ function enforceDepthAndRecovery(state: AvaGraphStateValue): Partial<AvaGraphSta
 
   let forcedReply = recoveryReplyForPlan(plan);
   let allowGif = ![
-    'logistical_answer',
     'life_decision',
     'pain_or_frustration',
     'trust_concern',

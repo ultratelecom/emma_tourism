@@ -65,6 +65,15 @@ const SEARCH_QUERIES: Record<string, string[]> = {
     'long time no see hug',
     'so happy to see you',
   ],
+  name_reaction: [
+    'wow amazing reaction',
+    'love it name reaction',
+    'impressed nodding cool',
+    'oh wow excited happy',
+    'love that excited approval',
+    'nodding approval wow',
+    'that is amazing reaction',
+  ],
 };
 
 // ============================================

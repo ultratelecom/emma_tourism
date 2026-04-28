@@ -37,63 +37,77 @@ import { runTurn } from '@/lib/ava-session';
 import { getAvaSessionById, getAvaUserById } from '@/lib/ava-db';
 
 /**
- * Pick a GIF cue based on the user's message and Ava's reply. Cheap,
- * deterministic; sparse by design — a GIF on every turn would get
- * noisy fast. Returns null when nothing fits, and the client simply
- * renders no GIF for that turn. The client then hits /api/emma/gif with
- * the cue to fetch the actual URL.
+ * Pick a GIF cue based on the user's message and Ava's reply.
+ * Ava now leads with warmth — GIFs appear on the first reply (name
+ * reaction), every other turn as a baseline, and whenever specific
+ * content signals call for one. The only exclusions are heavy
+ * emotional moments (hardship, distrust, life decisions) where a GIF
+ * would undercut the gravity of what the user shared.
  *
- * Cue palette (keep narrow):
- *   welcome       — first-turn greeting energy
- *   welcome_back  — returning visitor first turn
- *   empathy       — user expressed sadness, homesickness, distance pain
- *   celebration   — warmth, excitement, shared joy
- *   local_vibes   — they mentioned food, the bay, beach, pan, Carnival,
- *                   seine, liming — a "home feeling" moment
- *   farewell      — goodbye / we'll talk later
+ * Cue palette:
+ *   welcome        — opening greeting energy
+ *   welcome_back   — returning visitor
+ *   name_reaction  — warm response to user giving their name
+ *   hey_there      — general warmth / positivity fallback
+ *   empathy        — user expressed sadness, homesickness, distance pain
+ *   celebration    — warmth, excitement, shared joy
+ *   local_vibes    — Tobago/Caribbean cultural signal
+ *   farewell       — goodbye / we'll talk later
  */
 function pickGifCue(
   userMessage: string,
   reply: string,
   turnIndex: number,
   momentType?: string,
+  nextFocus?: string,
 ): string | null {
   const u = userMessage.toLowerCase();
   const r = reply.toLowerCase();
 
-  // Keep GIFs out of serious turns. Ava should not undercut someone
-  // sharing hardship, distrust, or a life decision with a reaction GIF.
-  if (
-    momentType &&
-    ['life_decision', 'pain_or_frustration', 'trust_concern', 'logistical_answer'].includes(momentType)
-  ) {
-    return null;
-  }
-
-  // Farewell (either side)
+  // Farewell (either side) always wins.
   if (/\b(bye|goodbye|gotta go|talk later|take care|catch you|ttyl|see ya)\b/.test(u + ' ' + r)) {
     return 'farewell';
   }
 
-  // Empathy — the user expressed longing, hardship, being far
+  // Hard suppress for truly serious moments — GIFs would feel cold or
+  // tone-deaf here. Logistical onboarding (name / location) is no
+  // longer suppressed; those are warm moments.
+  if (
+    momentType &&
+    ['life_decision', 'pain_or_frustration', 'trust_concern'].includes(momentType)
+  ) {
+    return null;
+  }
+
+  // Turn 2 = user just gave their name for the first time → warm name reaction.
+  if (turnIndex === 2) return 'name_reaction';
+
+  // User just gave their location (next focus is roots / generation)
+  // → celebration-style GIF to match the warm quip Ava gives.
+  if (
+    nextFocus &&
+    (nextFocus.includes('Tobago roots') || nextFocus.includes('generation'))
+  ) {
+    return 'celebration';
+  }
+
+  // Empathy — the user expressed longing, hardship, being far.
   if (/\b(miss|missing|homesick|far from|too long|sad|hard|tough|lonely|grief|lost)\b/.test(u)) {
     return 'empathy';
   }
 
-  // Local-vibe hook — specific Tobago/Trinidad cultural signals
+  // Local-vibe hook — Tobago/Trinidad cultural signals.
   if (/\b(seine|bay|beach|carnival|soca|pan|liming|doubles|bake.{0,5}shark|crab.{0,5}callaloo|maracas|maracas beach|sunday school|buccoo|speyside|castara)\b/.test(u)) {
     return 'local_vibes';
   }
 
-  // Celebration — shared excitement
-  if (/[!]{1,}|\b(love|can't wait|excited|beautiful|amazing|finally|yes yes|glad)\b/.test(u)) {
+  // User sent explicit excitement.
+  if (/[!]{2,}|\b(love it|can't wait|so excited|beautiful|amazing|finally|yes yes)\b/.test(u)) {
     return 'celebration';
   }
 
-  // Do not auto-drop a GIF after name capture / onboarding. It interrupts
-  // the first real question and makes Ava feel like she is entertaining
-  // herself instead of getting to know the person.
-  if (turnIndex === 2) return null;
+  // Baseline: keep things visually lively every other turn.
+  if (turnIndex % 2 === 0) return 'hey_there';
 
   return null;
 }
@@ -171,6 +185,7 @@ export async function POST(request: NextRequest) {
           result.reply,
           result.turn_index,
           result.turn_plan.moment_type,
+          result.turn_plan.next_best_question_focus ?? undefined,
         )
       : null;
 
