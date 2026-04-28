@@ -1161,7 +1161,25 @@ YOUR REPLY — hard constraints
 // UNIFIED TURN HELPERS
 // ============================================
 
-const UNIFIED_CALL_TIMEOUT_MS = 8000;
+const UNIFIED_CALL_TIMEOUT_MS = 12000;
+
+/** Human-readable fallback question per field — used when the LLM call fails. */
+const FIELD_FALLBACK_QUESTIONS: Record<string, string> = {
+  current_location_text: 'Where in the world are you based these days?',
+  generation: 'How far back does your Tobago side go — born there yourself, or is it parents, grandparents?',
+  visit_frequency: 'How often do you make it back to Tobago?',
+  industry: 'What kind of work do you do?',
+  profession_text: 'What fills your days, work-wise?',
+  connection_score: 'On a gut level, how tuned in are you to what\'s happening in Tobago these days?',
+  contribution_modes: 'If the runway was there, what would you want to give back — time, knowledge, money, reach?',
+  invest_intent: 'Would you ever put money behind something in Tobago?',
+  barriers: 'What\'s the biggest thing that would stop you from contributing more to Tobago?',
+  feature_priorities: 'If there was an online home for the diaspora, what would make it useful enough to come back to?',
+  trust_text: 'What would it take for you to trust a platform like that?',
+  future_roles: 'Would you want to be involved in anything future-facing — advisory, virtual meetings, surveys?',
+  opportunity_text: 'In your eyes, where is Tobago\'s real shot at economic growth?',
+  age_bracket: 'Mind me asking a rough decade you\'re in — 20s, 30s, 40s?',
+};
 const VALID_GIF_CUES = new Set([
   'name_reaction', 'celebration', 'empathy', 'local_vibes',
   'hey_there', 'farewell', 'welcome', 'welcome_back',
@@ -1194,6 +1212,9 @@ interface AvaRawOutput {
 /** Robustly extract the JSON block from the model's text output. */
 function parseUnifiedResponse(text: string): AvaRawOutput {
   const cleaned = text.trim();
+
+  // Walk forward for '{' and backward for '}' to find the outermost JSON block.
+  // This handles cases where the model adds a preamble or postamble.
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
 
@@ -1217,8 +1238,15 @@ function parseUnifiedResponse(text: string): AvaRawOutput {
     }
   }
 
-  console.warn('[ava.unified] JSON parse failed, treating raw text as reply');
-  return { reply: cleaned, captured: {}, gif_cue: null };
+  // If the model returned plain text (no JSON), use the text as the reply.
+  // This is better than a generic fallback — the model at least said something.
+  if (cleaned.length > 0 && !cleaned.startsWith('{')) {
+    console.warn('[ava.unified] model returned plain text (no JSON), using as reply');
+    return { reply: cleaned, captured: {}, gif_cue: 'hey_there' };
+  }
+
+  console.warn('[ava.unified] JSON parse failed completely, using safe fallback');
+  return { reply: cleaned || '', captured: {}, gif_cue: null };
 }
 
 /** Convert the LLM's "captured" map to the ExtractionResult shape for applyExtractionResult. */
@@ -1346,12 +1374,30 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     console.error('[ava.runTurn] unified call failed', { err });
     modelProvider = 'system';
     modelId = `${AVA_PROMPT_VERSION}/fallback`;
-    const nextHint = AVA_UNIFIED_PROFILE_FIELD_HINTS.find((h) => openFieldKeys.includes(h.key));
+    const nextFieldKey = AVA_UNIFIED_PROFILE_FIELD_HINTS.find((h) =>
+      openFieldKeys.includes(h.key),
+    )?.key;
+    const fallbackQ =
+      (nextFieldKey && FIELD_FALLBACK_QUESTIONS[nextFieldKey]) ??
+      'Where in the world are you based these days?';
+
+    // Best-effort capture even on timeout: if a location field is still open
+    // and the user message looks like a place name, save it immediately so
+    // we don't keep asking the same question after a timeout.
+    const timeoutCapture: Record<string, unknown> = {};
+    if (
+      openFieldKeys.includes('current_location_text') &&
+      /^[A-Za-z ,.'()-]+$/.test(input.userMessage.trim()) &&
+      input.userMessage.trim().length >= 2 &&
+      input.userMessage.trim().length <= 60
+    ) {
+      const place = input.userMessage.replace(/^i\s+(live|am|stay)\s+in\s+/i, '').trim();
+      timeoutCapture.current_location_text = place;
+    }
+
     rawOutput = {
-      reply: nextHint
-        ? `Got it. ${nextHint.key.replace(/_/g, ' ')}?`
-        : 'Got it. What part of the world are you based in these days?',
-      captured: {},
+      reply: `Got it. ${fallbackQ}`,
+      captured: timeoutCapture,
       gif_cue: null,
     };
   }

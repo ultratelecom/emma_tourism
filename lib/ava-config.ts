@@ -781,53 +781,24 @@ export const AVA_UNIFIED_PROFILE_FIELD_HINTS: { key: string; hint: string }[] = 
  * Appended to AVA_SYSTEM_PROMPT to instruct the model to return structured
  * JSON containing the visible reply, any newly captured profile fields, and
  * the appropriate GIF cue — all in one shot.
+ *
+ * Intentionally short: field definitions live in the per-turn user prompt
+ * (FIELDS STILL TO COLLECT) so the system message stays concise.
  */
 export const AVA_EXTRACTION_OUTPUT_ADDENDUM = `
 
 STRUCTURED OUTPUT REQUIRED
-Your entire response must be valid JSON only — no text before the opening brace, no text after the closing brace. No markdown code fences. Use exactly this structure:
+Your entire response must be valid JSON — no text before or after the JSON object, no markdown fences. Use this exact shape:
 
 {
-  "reply": "<Ava's full conversational reply — all voice and persona rules above still apply, write naturally>",
-  "captured": {
-    <only include keys for profile fields directly answered in the LATEST USER MESSAGE>
-    <do NOT re-capture anything already listed in ALREADY KNOWN>
-    <omit any field not answered in this message>
-
-    Valid keys and value formats:
-      current_location_text  — string (their words exactly, e.g. "New York")
-      current_city_region    — string
-      current_country        — string
-      generation             — "1st" | "2nd" | "3rd" | "4th+"
-      visit_frequency        — "multiple_times_per_year" | "once_per_year" | "every_few_years" | "rarely" | "never" | "lived_there"
-      industry               — "finance_banking" | "healthcare" | "technology" | "education" | "business_entrepreneurship" | "government_public_service" | "creative_industries" | "skilled_trades" | "other"
-      profession_text        — string (free text)
-      connection_score       — integer 1–5
-      contribution_modes     — array of strings
-      invest_intent          — "yes" | "maybe" | "no"
-      invest_sectors         — array of strings
-      barriers               — array of strings
-      feature_priorities     — array of strings
-      trust_text             — string (free text)
-      future_roles           — array of strings
-      opportunity_text       — string (free text)
-      age_bracket            — "18-24" | "25-34" | "35-44" | "45-54" | "55-64" | "65+"
-      gender                 — string (free text)
-      education_level        — string (free text)
-  },
-  "gif_cue": <one of the values below, or null>
+  "reply": "<your conversational reply — all voice rules above apply>",
+  "captured": { <key:value pairs for fields answered in the LATEST message only — keys are from FIELDS STILL TO COLLECT> },
+  "gif_cue": <"name_reaction"|"celebration"|"empathy"|"local_vibes"|"hey_there"|"farewell"|null>
 }
 
-gif_cue values — choose the ONE that fits the emotional tone of your reply, or null:
-  "name_reaction" — user just gave their name for the first time
-  "celebration"   — user shared exciting news, an achievement, a milestone
-  "empathy"       — user expressed difficulty, hardship, homesickness, distance pain
-  "local_vibes"   — user mentioned Caribbean culture, food, a beach, a fete, a Tobago place
-  "hey_there"     — warm general exchange; use this as the safe default for most replies
-  "farewell"      — user is wrapping up or saying goodbye
-  null            — serious emotional moment (deep hardship, distrust, life crisis) where a GIF would feel tone-deaf
+gif_cue guide: "name_reaction" = user gave their name; "celebration" = exciting news/achievement; "empathy" = hardship/homesickness; "local_vibes" = Caribbean culture/food/places; "hey_there" = warm default for most replies; "farewell" = goodbye; null = serious/heavy moment.
 
-IMPORTANT: Output valid JSON only. The "reply" value is Ava's full reply text, written with all of Ava's voice rules intact.`;
+Output JSON only. No explanation. "reply" is Ava's full reply in her voice.`;
 
 // ============================================
 // EXPORT UTILITIES
