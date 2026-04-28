@@ -3,72 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 // GIPHY API key - set in environment variables
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
 
-// ============================================
-// SEARCH MODE (preferred for Ava cues)
-// For these cues, we query Giphy's /search with a rotating family of
-// queries and pick a random result from the top 50. Every call hits a
-// different slice of Giphy, so the same GIF almost never repeats across
-// sessions — the curated hardcoded pools below are used as a safety net
-// only when search returns nothing.
-// ============================================
-
-const SEARCH_QUERIES: Record<string, string[]> = {
-  welcome: [
-    'friendly wave hello',
-    'warm hello smile',
-    'happy greeting hi',
-    'hi there wave cute',
-    'welcome back hug',
-    'excited hello wave',
-    'caribbean hello wave',
-    'hello animated cute',
-  ],
-  hey_there: [
-    'hey there wave',
-    'hi friend wave',
-    'hello greeting cute',
-    'nice to meet you wave',
-    'friendly hi',
-  ],
-  local_vibes: [
-    'tropical vibes',
-    'caribbean chill',
-    'island life',
-    'beach vibes good',
-    'good vibes sunshine',
-    'relaxed sunny day',
-  ],
-  empathy: [
-    'i hear you',
-    'empathy listening',
-    'i understand you',
-    'gentle nod support',
-    'sympathetic hug',
-    'thinking of you hug',
-  ],
-  celebration: [
-    'celebration confetti happy',
-    'we did it cheer',
-    'yay celebration',
-    'party time celebrate',
-    'happy dance confetti',
-  ],
-  farewell: [
-    'goodbye wave cute',
-    'see you later wave',
-    'bye bye wave',
-    'until next time wave',
-  ],
-  welcome_back: [
-    'welcome back hug',
-    'missed you reunion',
-    'long time no see hug',
-    'so happy to see you',
-  ],
-  // name_reaction intentionally NOT in SEARCH_QUERIES — Giphy search
-  // returns unpredictable real photos for these terms. Always use the
-  // pre-approved curated IDs in CURATED_GIFS.name_reaction instead.
-};
+// All cues use pre-approved curated GIF IDs — no Giphy search.
+// Giphy search was producing inconsistent and occasionally inappropriate
+// results (real photos, off-tone GIFs). Curated IDs are vetted and safe.
 
 // ============================================
 // PRE-APPROVED, CURATED GIF IDs
@@ -276,93 +213,27 @@ const CURATED_GIFS: Record<string, string[]> = {
   ],
 };
 
-/**
- * Fetch a GIF via Giphy search with a random rotating query. This is
- * the preferred path for conversational cues because it gives us a huge
- * pool of fresh results every call — curated IDs are only used as a
- * fallback when search fails.
- */
-async function fetchViaSearch(type: string) {
-  const queries = SEARCH_QUERIES[type];
-  if (!queries || queries.length === 0) return null;
-
-  const query = queries[Math.floor(Math.random() * queries.length)];
-  const url =
-    `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}` +
-    `&q=${encodeURIComponent(query)}&limit=50&rating=pg&lang=en&bundle=messaging_non_clips`;
-
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!Array.isArray(data?.data) || data.data.length === 0) return null;
-
-  // Pick a random result from the returned slate. The random offset +
-  // random query combination means repeats are extremely unlikely.
-  const pick = data.data[Math.floor(Math.random() * data.data.length)];
-  if (!pick?.images?.fixed_height?.url) return null;
-
-  return {
-    url: pick.images.fixed_height.url,
-    width: pick.images.fixed_height.width,
-    height: pick.images.fixed_height.height,
-    title: pick.title as string,
-  };
-}
-
 export async function GET(request: NextRequest) {
   try {
-    // Check if API key is configured
     if (!GIPHY_API_KEY) {
-      console.error('GIPHY_API_KEY not configured');
       return NextResponse.json({ error: 'GIPHY API key not configured' }, { status: 500 });
     }
-    
+
     const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type') || 'excited';
+    const type = searchParams.get('type') || 'hey_there';
 
-    // Search-mode first: gives maximum variety across sessions.
-    if (SEARCH_QUERIES[type]) {
-      const fromSearch = await fetchViaSearch(type);
-      if (fromSearch) {
-        return NextResponse.json(fromSearch);
-      }
-      // fall through to curated
-    }
-
-    // Get curated GIF IDs for this type
-    const gifIds = CURATED_GIFS[type] || CURATED_GIFS.excited;
-    
-    // Pick a random GIF from the curated list
+    // Pick from curated IDs; fall back to hey_there if the cue is unknown.
+    const gifIds = CURATED_GIFS[type] ?? CURATED_GIFS.hey_there;
     const randomId = gifIds[Math.floor(Math.random() * gifIds.length)];
 
-    // Fetch the specific GIF by ID
     const response = await fetch(
-      `https://api.giphy.com/v1/gifs/${randomId}?api_key=${GIPHY_API_KEY}`
+      `https://api.giphy.com/v1/gifs/${randomId}?api_key=${GIPHY_API_KEY}`,
     );
 
-    if (!response.ok) {
-      throw new Error('GIPHY API failed');
-    }
+    if (!response.ok) throw new Error('GIPHY API failed');
 
     const data = await response.json();
-    
-    if (!data.data) {
-      // Fallback to first GIF in excited category
-      const fallbackId = CURATED_GIFS.excited[0];
-      const fallbackResponse = await fetch(
-        `https://api.giphy.com/v1/gifs/${fallbackId}?api_key=${GIPHY_API_KEY}`
-      );
-      const fallbackData = await fallbackResponse.json();
-      
-      if (fallbackData.data) {
-        return NextResponse.json({
-          url: fallbackData.data.images.fixed_height.url,
-          width: fallbackData.data.images.fixed_height.width,
-          height: fallbackData.data.images.fixed_height.height,
-          title: fallbackData.data.title,
-        });
-      }
-    }
+    if (!data.data) throw new Error('No GIF data returned');
 
     return NextResponse.json({
       url: data.data.images.fixed_height.url,
@@ -370,7 +241,6 @@ export async function GET(request: NextRequest) {
       height: data.data.images.fixed_height.height,
       title: data.data.title,
     });
-
   } catch (error) {
     console.error('GIF fetch error:', error);
     return NextResponse.json({ error: 'Failed to fetch GIF' }, { status: 500 });

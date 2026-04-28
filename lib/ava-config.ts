@@ -747,6 +747,89 @@ CONTEXT INJECTION
 Before every turn, the system will tell you which chapter you are in, which profile fields are still open, and one or two details the person has already shared that are worth a callback. Use them. Do not quote them verbatim. Speak like you remember, not like you are reading.`;
 
 // ============================================
+// UNIFIED OUTPUT FORMAT (single-LLM-call architecture)
+// ============================================
+
+/**
+ * Priority-ordered list of profile field hints used in the unified user-turn
+ * prompt. The LLM uses these both to ask the right questions and to extract
+ * values from free-form answers into the "captured" JSON block.
+ */
+export const AVA_UNIFIED_PROFILE_FIELD_HINTS: { key: string; hint: string }[] = [
+  { key: 'current_location_text', hint: 'where they live now in their words (e.g. "New York", "Australia", "the UK")' },
+  { key: 'generation', hint: 'Tobago roots depth — "1st" (born there) | "2nd" (parents) | "3rd" (grandparents) | "4th+"' },
+  { key: 'visit_frequency', hint: 'how often they return to Tobago — "multiple_times_per_year" | "once_per_year" | "every_few_years" | "rarely" | "never" | "lived_there"' },
+  { key: 'industry', hint: 'broad field of work — "finance_banking" | "healthcare" | "technology" | "education" | "business_entrepreneurship" | "government_public_service" | "creative_industries" | "skilled_trades" | "other"' },
+  { key: 'profession_text', hint: 'specific role, employer, title (free text, e.g. "nurse at Mount Sinai", "consultant at Verizon")' },
+  { key: 'connection_score', hint: 'how connected they feel to Tobago, integer 1 (not at all) to 5 (very)' },
+  { key: 'contribution_modes', hint: 'what they would give back (array) — "investment" | "mentorship_coaching" | "advisory" | "knowledge_sharing_teaching" | "business_partnerships" | "philanthropy" | "tourism_promotion" | "return_migration"' },
+  { key: 'invest_intent', hint: 'open to investing in Tobago — "yes" | "maybe" | "no"' },
+  { key: 'invest_sectors', hint: 'sectors of interest when invest_intent is yes/maybe (array) — "tourism" | "real_estate" | "agriculture" | "renewable_energy" | "small_business" | "other"' },
+  { key: 'barriers', hint: 'what blocks them from contributing (array) — "lack_of_information" | "lack_of_trust" | "limited_opportunities" | "bureaucracy" | "distance_logistics" | "time_constraints"' },
+  { key: 'feature_priorities', hint: 'diaspora platform features they would value (array) — "investment_dashboard" | "networking" | "job_opportunities" | "government_updates" | "mentorship_programs" | "event_notifications" | "data_privacy"' },
+  { key: 'trust_text', hint: 'what would make them trust a diaspora platform (free text)' },
+  { key: 'future_roles', hint: 'future involvement they would accept (array) — "advisory_group" | "future_surveys" | "virtual_meetings" | "investment_opportunities" | "pilot_programs"' },
+  { key: 'opportunity_text', hint: "their view on Tobago's biggest economic opportunity (free text)" },
+  { key: 'age_bracket', hint: 'rough age group — "18-24" | "25-34" | "35-44" | "45-54" | "55-64" | "65+" — infer from context, ask last only if still empty' },
+  { key: 'gender', hint: 'how they identify (free text) — infer from context, never push' },
+  { key: 'education_level', hint: 'highest education level (free text) — infer from career context when possible' },
+  { key: 'current_city_region', hint: 'city, state, province, or region if they mention one (free text)' },
+  { key: 'current_country', hint: 'country they currently reside in — infer from location_text when unambiguous (e.g. "New York" → "United States", "Toronto" → "Canada")' },
+];
+
+/**
+ * Appended to AVA_SYSTEM_PROMPT to instruct the model to return structured
+ * JSON containing the visible reply, any newly captured profile fields, and
+ * the appropriate GIF cue — all in one shot.
+ */
+export const AVA_EXTRACTION_OUTPUT_ADDENDUM = `
+
+STRUCTURED OUTPUT REQUIRED
+Your entire response must be valid JSON only — no text before the opening brace, no text after the closing brace. No markdown code fences. Use exactly this structure:
+
+{
+  "reply": "<Ava's full conversational reply — all voice and persona rules above still apply, write naturally>",
+  "captured": {
+    <only include keys for profile fields directly answered in the LATEST USER MESSAGE>
+    <do NOT re-capture anything already listed in ALREADY KNOWN>
+    <omit any field not answered in this message>
+
+    Valid keys and value formats:
+      current_location_text  — string (their words exactly, e.g. "New York")
+      current_city_region    — string
+      current_country        — string
+      generation             — "1st" | "2nd" | "3rd" | "4th+"
+      visit_frequency        — "multiple_times_per_year" | "once_per_year" | "every_few_years" | "rarely" | "never" | "lived_there"
+      industry               — "finance_banking" | "healthcare" | "technology" | "education" | "business_entrepreneurship" | "government_public_service" | "creative_industries" | "skilled_trades" | "other"
+      profession_text        — string (free text)
+      connection_score       — integer 1–5
+      contribution_modes     — array of strings
+      invest_intent          — "yes" | "maybe" | "no"
+      invest_sectors         — array of strings
+      barriers               — array of strings
+      feature_priorities     — array of strings
+      trust_text             — string (free text)
+      future_roles           — array of strings
+      opportunity_text       — string (free text)
+      age_bracket            — "18-24" | "25-34" | "35-44" | "45-54" | "55-64" | "65+"
+      gender                 — string (free text)
+      education_level        — string (free text)
+  },
+  "gif_cue": <one of the values below, or null>
+}
+
+gif_cue values — choose the ONE that fits the emotional tone of your reply, or null:
+  "name_reaction" — user just gave their name for the first time
+  "celebration"   — user shared exciting news, an achievement, a milestone
+  "empathy"       — user expressed difficulty, hardship, homesickness, distance pain
+  "local_vibes"   — user mentioned Caribbean culture, food, a beach, a fete, a Tobago place
+  "hey_there"     — warm general exchange; use this as the safe default for most replies
+  "farewell"      — user is wrapping up or saying goodbye
+  null            — serious emotional moment (deep hardship, distrust, life crisis) where a GIF would feel tone-deaf
+
+IMPORTANT: Output valid JSON only. The "reply" value is Ava's full reply text, written with all of Ava's voice rules intact.`;
+
+// ============================================
 // EXPORT UTILITIES
 // ============================================
 

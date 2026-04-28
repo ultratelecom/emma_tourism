@@ -36,85 +36,8 @@ import { after } from 'next/server';
 import { runTurn } from '@/lib/ava-session';
 import { getAvaSessionById, getAvaUserById } from '@/lib/ava-db';
 
-/**
- * Pick a GIF cue based on the user's message and Ava's reply.
- * Ava now leads with warmth — GIFs appear on the first reply (name
- * reaction), every other turn as a baseline, and whenever specific
- * content signals call for one. The only exclusions are heavy
- * emotional moments (hardship, distrust, life decisions) where a GIF
- * would undercut the gravity of what the user shared.
- *
- * Cue palette:
- *   welcome        — opening greeting energy
- *   welcome_back   — returning visitor
- *   name_reaction  — warm response to user giving their name
- *   hey_there      — general warmth / positivity fallback
- *   empathy        — user expressed sadness, homesickness, distance pain
- *   celebration    — warmth, excitement, shared joy
- *   local_vibes    — Tobago/Caribbean cultural signal
- *   farewell       — goodbye / we'll talk later
- */
-function pickGifCue(
-  userMessage: string,
-  reply: string,
-  turnIndex: number,
-  momentType?: string,
-  nextFocus?: string,
-): string | null {
-  const u = userMessage.toLowerCase();
-  const r = reply.toLowerCase();
-
-  // Farewell (either side) always wins.
-  if (/\b(bye|goodbye|gotta go|talk later|take care|catch you|ttyl|see ya)\b/.test(u + ' ' + r)) {
-    return 'farewell';
-  }
-
-  // Hard suppress for truly serious moments — GIFs would feel cold or
-  // tone-deaf here. Logistical onboarding (name / location) is no
-  // longer suppressed; those are warm moments.
-  if (
-    momentType &&
-    ['life_decision', 'pain_or_frustration', 'trust_concern'].includes(momentType)
-  ) {
-    return null;
-  }
-
-  // Turn 2 = user just gave their name for the first time → warm name reaction.
-  if (turnIndex === 2) return 'name_reaction';
-
-  // User just gave their location (next focus is roots / generation)
-  // → hey_there keeps the mood warm without risking random results.
-  if (
-    nextFocus &&
-    (nextFocus.includes('Tobago roots') || nextFocus.includes('generation'))
-  ) {
-    return 'hey_there';
-  }
-
-  // Empathy — the user expressed longing, hardship, being far.
-  if (/\b(miss|missing|homesick|far from|too long|sad|hard|tough|lonely|grief|lost)\b/.test(u)) {
-    return 'empathy';
-  }
-
-  // Local-vibe hook — Tobago/Trinidad cultural signals.
-  if (/\b(seine|bay|beach|carnival|soca|pan|liming|doubles|bake.{0,5}shark|crab.{0,5}callaloo|maracas|maracas beach|sunday school|buccoo|speyside|castara)\b/.test(u)) {
-    return 'local_vibes';
-  }
-
-  // User sent explicit excitement.
-  if (/[!]{2,}|\b(love it|can't wait|so excited|beautiful|amazing|finally|yes yes)\b/.test(u)) {
-    return 'celebration';
-  }
-
-  // Baseline: keep things visually lively every other turn.
-  if (turnIndex % 2 === 0) return 'hey_there';
-
-  return null;
-}
-
-// The chat lane should resolve in a few seconds on gpt-4o-mini; the
-// background extraction on step-3.5-flash can take 10–40s but it runs
-// after the response is sent via `after()`.
+// The unified LLM call returns the GIF cue directly, so no client-side
+// classification is needed. The `after()` hook persists captured fields.
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
@@ -166,28 +89,16 @@ export async function POST(request: NextRequest) {
     after(async () => {
       try {
         const summary = await result.finalize;
-        console.log('[ava/turn] extraction finalized', {
+        console.log('[ava/turn] profile fields saved', {
           session_id,
           turn_index: result.turn_index,
-          extraction_latency_ms: summary.extraction_latency_ms,
           fields: summary.profile_fields_written,
-          entities: summary.entities_written,
-          notes: summary.notes_written,
+          latency_ms: summary.extraction_latency_ms,
         });
       } catch (err) {
-        console.error('[ava/turn] extraction finalize threw:', err);
+        console.error('[ava/turn] finalize threw:', err);
       }
     });
-
-    const gif_cue = result.allow_gif
-      ? pickGifCue(
-          message,
-          result.reply,
-          result.turn_index,
-          result.turn_plan.moment_type,
-          result.turn_plan.next_best_question_focus ?? undefined,
-        )
-      : null;
 
     return NextResponse.json({
       reply: result.reply,
@@ -195,7 +106,7 @@ export async function POST(request: NextRequest) {
       turn_index: result.turn_index,
       chapter_id: result.chapter_id,
       chapter_changed: result.chapter_changed,
-      gif_cue,
+      gif_cue: result.gif_cue,
       meta: {
         chat_latency_ms: result.chat_latency_ms,
         prompt_version: result.prompt_version,

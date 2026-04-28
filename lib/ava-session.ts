@@ -29,20 +29,17 @@ import { generateText } from 'ai';
 import {
   AVA_CHAPTERS,
   AVA_CONVERSATION_ROUTES,
+  AVA_EXTRACTION_OUTPUT_ADDENDUM,
+  AVA_UNIFIED_PROFILE_FIELD_HINTS,
   AVA_PERSONALITY,
   AVA_PROFILE_FIELDS,
   AVA_SYSTEM_PROMPT,
   getAvaChapterById,
 } from './ava-config';
 import { getAvaChatModel } from './ava-model';
-import { extractFromUserMessage } from './ava-extract';
-import { deterministicCaptureFromTurn } from './ava-deterministic-capture';
-import { assessAvaReplyQuality, postProcessAvaReply } from './ava-voice';
-import {
-  AVA_PROMPT_VERSION,
-  formatAvaTurnPlan,
-  type AvaTurnPlan,
-} from './ava-turn-planner';
+import type { ExtractedProfileUpdate, ExtractionResult } from './ava-extract';
+import { postProcessAvaReply } from './ava-voice';
+import { AVA_PROMPT_VERSION, formatAvaTurnPlan, type AvaTurnPlan } from './ava-turn-planner';
 import { runAvaGraphDecision } from './ava-graph/graph';
 import {
   applyExtractionResult,
@@ -98,19 +95,19 @@ export interface RunTurnResult {
   chapter_changed: boolean;
   chat_latency_ms: number;
   prompt_version: string;
-  turn_plan: AvaTurnPlan;
+  turn_plan: AvaTurnPlan | null;
   reply_quality: {
     ok: boolean;
     issues: string[];
     retried: boolean;
   };
   allow_gif: boolean;
+  /** GIF cue chosen by the LLM based on the conversation tone. */
+  gif_cue: string | null;
   /**
-   * Resolves once the hidden extraction pass has finished writing to the
-   * profile. Callers can await this if they want the final profile state
-   * (e.g. smoke tests). API routes should NOT await this on the request
-   * path — use `after(() => result.finalize)` so the user gets their
-   * reply back without waiting on step-3.5-flash.
+   * Resolves once captured profile fields have been written to the DB.
+   * API routes should use `after(() => result.finalize)` so the user gets
+   * their reply without waiting on the DB write.
    */
   finalize: Promise<ExtractionFinalizeSummary>;
 }
@@ -252,11 +249,8 @@ async function safeRead<T>(label: string, task: Promise<T>, fallback: T): Promis
 }
 
 /**
- * Called when the chat model times out or throws. Must ALWAYS return a
- * coherent reply that acknowledges the user and advances the conversation
- * with the next required question. "We can keep it easy." and any other
- * no-question shape are strictly banned here — a model failure is not a
- * reason to abandon the turn.
+ * @deprecated — dead code kept for reference. The unified LLM call in runTurn()
+ * replaced these helpers. Remove in a follow-up cleanup pass.
  */
 function fallbackAvaReplyForModelFailure(
   turnPlan: AvaTurnPlan,
@@ -1164,14 +1158,142 @@ YOUR REPLY — hard constraints
 }
 
 // ============================================
-// RUN TURN (main twin-pass entry point)
+// UNIFIED TURN HELPERS
+// ============================================
+
+const UNIFIED_CALL_TIMEOUT_MS = 8000;
+const VALID_GIF_CUES = new Set([
+  'name_reaction', 'celebration', 'empathy', 'local_vibes',
+  'hey_there', 'farewell', 'welcome', 'welcome_back',
+]);
+
+/** Derive chapter ID from first open field (used for UI display only). */
+function chapterFromOpenFields(openFieldKeys: string[]): string {
+  const MAP: Record<string, string> = {
+    current_location_text: 'introductions', current_city_region: 'introductions',
+    current_country: 'introductions', generation: 'introductions', visit_frequency: 'introductions',
+    industry: 'who_you_are', profession_text: 'who_you_are',
+    education_level: 'who_you_are', age_bracket: 'who_you_are', gender: 'who_you_are',
+    connection_score: 'tobago_now', contribution_modes: 'tobago_now',
+    invest_intent: 'investment', invest_sectors: 'investment', barriers: 'investment',
+    feature_priorities: 'platform_vision', trust_text: 'platform_vision',
+    future_roles: 'platform_vision', opportunity_text: 'platform_vision',
+  };
+  for (const key of openFieldKeys) {
+    if (MAP[key]) return MAP[key];
+  }
+  return openFieldKeys.length === 0 ? 'wrap_up' : 'introductions';
+}
+
+interface AvaRawOutput {
+  reply: string;
+  captured: Record<string, unknown>;
+  gif_cue: string | null;
+}
+
+/** Robustly extract the JSON block from the model's text output. */
+function parseUnifiedResponse(text: string): AvaRawOutput {
+  const cleaned = text.trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(cleaned.slice(start, end + 1));
+      if (typeof parsed.reply === 'string' && parsed.reply.length > 0) {
+        const rawCue = parsed.gif_cue;
+        const gif_cue =
+          typeof rawCue === 'string' && VALID_GIF_CUES.has(rawCue) ? rawCue : null;
+        const captured =
+          parsed.captured &&
+          typeof parsed.captured === 'object' &&
+          !Array.isArray(parsed.captured)
+            ? (parsed.captured as Record<string, unknown>)
+            : {};
+        return { reply: parsed.reply, captured, gif_cue };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  console.warn('[ava.unified] JSON parse failed, treating raw text as reply');
+  return { reply: cleaned, captured: {}, gif_cue: null };
+}
+
+/** Convert the LLM's "captured" map to the ExtractionResult shape for applyExtractionResult. */
+function capturedToExtraction(captured: Record<string, unknown>): ExtractionResult {
+  const profile_updates: ExtractedProfileUpdate[] = Object.entries(captured)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([field_key, value]) => ({
+      field_key,
+      value: value as string | string[] | number | null,
+      confidence: 0.95,
+      evidence: '[unified LLM extraction]',
+    }));
+  return {
+    profile_updates,
+    entities: [],
+    notes: [],
+    raw_model_output: JSON.stringify(captured),
+    model_info: { provider: 'openai', modelId: 'unified' },
+    elapsed_ms: 0,
+    parse_ok: true,
+  };
+}
+
+/** Build the per-turn user-side prompt (conversation history + profile state + open fields). */
+function buildUnifiedUserPrompt(params: {
+  userName: string;
+  userMessage: string;
+  history: AvaMessage[];
+  snapshot: Record<string, string | string[] | number | null>;
+  openFieldKeys: string[];
+  turnIndex: number;
+}): string {
+  const historyLines = params.history
+    .filter((m) => m.turn_index < params.turnIndex)
+    .map((m) => `  ${m.sender === 'ava' ? 'Ava' : params.userName}: ${m.content}`)
+    .join('\n');
+
+  const snapshotEntries = Object.entries(params.snapshot).filter(
+    ([, v]) => v !== null && v !== '' && !(Array.isArray(v) && v.length === 0),
+  );
+  const snapshotLines =
+    snapshotEntries.length > 0
+      ? snapshotEntries
+          .map(([k, v]) => `  - ${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join('\n')
+      : '  (nothing yet)';
+
+  const openHints = AVA_UNIFIED_PROFILE_FIELD_HINTS.filter((h) =>
+    params.openFieldKeys.includes(h.key),
+  )
+    .map((h, i) => `  ${i + 1}. ${h.key} — ${h.hint}`)
+    .join('\n');
+
+  return `CONVERSATION HISTORY:
+${historyLines || "  (this is the first reply after Ava's opener)"}
+
+ALREADY KNOWN ABOUT ${params.userName}:
+${snapshotLines}
+
+FIELDS STILL TO COLLECT (collect naturally, one at a time, in this priority order):
+${openHints || '  (all fields collected — wind the conversation down naturally)'}
+
+LATEST MESSAGE FROM ${params.userName}:
+  "${params.userMessage}"`;
+}
+
+// ============================================
+// RUN TURN (unified single-LLM-call)
 // ============================================
 
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   const user = await getAvaUserById(input.userId);
   if (!user) throw new Error(`ava_user not found: ${input.userId}`);
 
-  // 1. Persist the user's message (grab its id for source_message_id later)
+  // 1. Persist the user's message
   const userTurnIndex = await getNextTurnIndex(input.sessionId);
   const userMsgRow = await insertUserMessage({
     sessionId: input.sessionId,
@@ -1180,215 +1302,104 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     turnIndex: userTurnIndex,
   });
 
-  // 2. Decide chapter
-  const { chapterId, openFieldKeys } = await pickCurrentChapter(input.userId);
-  const previousChapter = (
-    await safeRead('getRecentMessages', getRecentMessages(input.sessionId, 1), [] as AvaMessage[])
-  )[0]?.chapter_id;
-  const chapter_changed = previousChapter != null && previousChapter !== chapterId;
+  // 2. Load all context in parallel (with safe fallbacks for transient DB errors)
+  const [history, snapshot, openFieldKeys] = await Promise.all([
+    safeRead('getFullSessionHistory', getFullSessionHistory(input.sessionId), [] as AvaMessage[]),
+    safeRead('getProfileSnapshot', getProfileSnapshot(input.userId), {} as Record<string, string | string[] | number | null>),
+    safeRead('getOpenFieldKeys', getOpenFieldKeys(input.userId), Object.keys(AVA_PROFILE_FIELDS)),
+  ]);
 
-  // 3. Current profile snapshot (used by both lanes)
-  const currentProfile = await safeRead(
-    'getProfileSnapshot.beforeExtraction',
-    getProfileSnapshot(input.userId),
-    {} as Record<string, string | string[] | number | null>,
-  );
+  const chapterId = chapterFromOpenFields(openFieldKeys);
 
-  // 4. Build context for chat lane (includes just-in-time nudges)
-  const { contextBlock, turnPlan, forcedReply, allowGif, lastAvaMessage } = await buildContextBlock({
-    userId: input.userId,
+  // 3. Build the unified prompt (history + what we know + what we still need)
+  const userPrompt = buildUnifiedUserPrompt({
     userName: user.name,
-    sessionId: input.sessionId,
-    chapterId,
-    openFieldKeys,
     userMessage: input.userMessage,
+    history,
+    snapshot,
+    openFieldKeys,
     turnIndex: userTurnIndex,
   });
 
-  // 5. Fire chat + extraction in parallel. We await chat inline (to return
-  //    Ava's reply as fast as possible) and hand extraction back as a
-  //    background promise the caller can await if they want to.
+  // 4. Single LLM call — reply + profile extraction + gif_cue in one shot
   const turnStartedAt = Date.now();
-  const deterministicExtraction = deterministicCaptureFromTurn({
-    userMessage: input.userMessage,
-    lastAvaMessage,
-    turnPlan,
-  });
+  const { model: chatModel, info: chatInfo } = getAvaChatModel();
+  let modelProvider = chatInfo.provider as string;
+  let modelId = chatInfo.modelId;
+  let rawOutput: AvaRawOutput;
 
-  if (deterministicExtraction) {
-    await safeRead(
-      'applyDeterministicExtraction',
-      applyExtractionResult({
-        userId: input.userId,
-        extraction: deterministicExtraction,
-        sourceMessageId: userMsgRow.id,
-        minConfidence: 0.5,
+  try {
+    const result = await withTimeout(
+      generateText({
+        model: chatModel,
+        system: AVA_SYSTEM_PROMPT + AVA_EXTRACTION_OUTPUT_ADDENDUM,
+        prompt: userPrompt,
+        providerOptions: {
+          openai: { reasoningEffort: 'medium' },
+        },
       }),
-      {
-        profile_fields_written: 0,
-        profile_fields_skipped_low_confidence: 0,
-        entities_written: 0,
-        notes_written: 0,
-        profile_completion: 0,
-      },
+      UNIFIED_CALL_TIMEOUT_MS,
+      'ava_unified_call',
     );
-  }
-
-  let chatResult: Awaited<ReturnType<typeof generateText>> | null = null;
-  let modelProvider: string | null = null;
-  let modelId: string | null = null;
-  let rawReplyText = forcedReply ?? fastReplyForTurnPlan(turnPlan, user.name, input.userMessage, openFieldKeys) ?? '';
-  const usedFastReply = rawReplyText.length > 0;
-
-  if (usedFastReply) {
+    rawOutput = parseUnifiedResponse(result.text);
+  } catch (err) {
+    console.error('[ava.runTurn] unified call failed', { err });
     modelProvider = 'system';
-    modelId = `${AVA_PROMPT_VERSION}/fast-onboarding`;
-  } else {
-    const { model: chatModel, info: chatInfo } = getAvaChatModel();
-    modelProvider = chatInfo.provider;
-    modelId = chatInfo.modelId;
-    const reasoningEffort = reasoningEffortForTurnPlan(turnPlan);
-    try {
-      chatResult = await withTimeout(
-        generateText({
-          model: chatModel,
-          system: AVA_SYSTEM_PROMPT,
-          prompt: contextBlock,
-          // NOTE: no `temperature` here. gpt-5.4 is a reasoning model and the
-          // AI SDK emits a warning if temperature is set on it; the parameter
-          // is silently ignored. The voice texture comes from prompt structure
-          // and the planner, while reasoning effort scales by turn complexity.
-          providerOptions: {
-            openai: {
-              reasoningEffort,
-            },
-          },
-        }),
-        CHAT_MODEL_TIMEOUT_MS,
-        'ava_chat_model',
-      );
-      rawReplyText = chatResult.text;
-    } catch (err) {
-      console.error('[ava.runTurn] chat model failed, using planner fallback', {
-        err,
-        prompt_version: AVA_PROMPT_VERSION,
-        turn_plan: turnPlan,
-      });
-      modelProvider = 'system';
-      modelId = `${AVA_PROMPT_VERSION}/fallback`;
-      rawReplyText = fallbackAvaReplyForModelFailure(turnPlan, openFieldKeys);
-    }
+    modelId = `${AVA_PROMPT_VERSION}/fallback`;
+    const nextHint = AVA_UNIFIED_PROFILE_FIELD_HINTS.find((h) => openFieldKeys.includes(h.key));
+    rawOutput = {
+      reply: nextHint
+        ? `Got it. ${nextHint.key.replace(/_/g, ' ')}?`
+        : 'Got it. What part of the world are you based in these days?',
+      captured: {},
+      gif_cue: null,
+    };
   }
+
   const chat_latency_ms = Date.now() - turnStartedAt;
 
-  // Run the voice post-processor on the raw model output. Strips banned
-  // customer-service openers, trims second-question drift, normalises
-  // em-dashes. Edits are logged but not returned to the caller.
-  let voice = postProcessAvaReply(rawReplyText);
+  // 5. Voice post-processor (strips banned phrases, normalises formatting)
+  const voice = postProcessAvaReply(rawOutput.reply);
   if (voice.edited) {
     console.log('[ava.runTurn] voice post-process edited', {
       removed: voice.removed_phrases,
       stripped_cliche_shapes: voice.stripped_cliche_shapes,
-      trimmed_second_question: voice.trimmed_second_question,
-      normalized_dashes: voice.normalized_dashes,
     });
   }
-  let quality = assessAvaReplyQuality({
-    userMessage: input.userMessage,
-    reply: voice.text,
-    turnPlan,
-  });
 
-  let qualityRetried = false;
-  if (!usedFastReply && quality.should_retry && quality.retry_instruction) {
-    qualityRetried = true;
-    console.log('[ava.runTurn] retrying reply for quality', {
-      issues: quality.issues,
-      prompt_version: AVA_PROMPT_VERSION,
-      turn_plan: turnPlan,
-    });
-    try {
-      const { model: chatModel } = getAvaChatModel();
-      chatResult = await withTimeout(
-        generateText({
-          model: chatModel,
-          system: AVA_SYSTEM_PROMPT,
-          prompt: `${contextBlock}
-
-QUALITY RETRY
-${quality.retry_instruction}
-
-BAD FIRST DRAFT (do not reuse if it caused the failure)
-${voice.text}`,
-          providerOptions: {
-            openai: {
-              reasoningEffort: 'xhigh',
-            },
-          },
-        }),
-        CHAT_MODEL_TIMEOUT_MS,
-        'ava_chat_retry_model',
-      );
-      voice = postProcessAvaReply(chatResult.text);
-    } catch (err) {
-      console.error('[ava.runTurn] quality retry failed, keeping first draft', {
-        err,
-        prompt_version: AVA_PROMPT_VERSION,
-        issues: quality.issues,
-      });
-    }
-    quality = assessAvaReplyQuality({
-      userMessage: input.userMessage,
-      reply: voice.text,
-      turnPlan,
-    });
-    if (!quality.ok) {
-      console.log('[ava.runTurn] reply still has quality issues after retry', {
-        issues: quality.issues,
-        prompt_version: AVA_PROMPT_VERSION,
-      });
-    }
-  }
-  const replyText = voice.text;
-
-  // 6. Persist Ava's reply immediately
+  // 6. Persist Ava's reply
   const avaMessage = await insertAvaMessage({
     sessionId: input.sessionId,
     userId: input.userId,
-    content: replyText,
+    content: voice.text,
     turnIndex: userTurnIndex + 1,
     isSystemDelivered: false,
     modelProvider,
     modelId,
     chapterId,
     latencyMs: chat_latency_ms,
-    inputTokens: chatResult?.usage?.inputTokens ?? null,
-    outputTokens: chatResult?.usage?.outputTokens ?? null,
   });
 
-  // 7. Update session chapter if it shifted
-  if (chapter_changed) {
-    await setSessionChapter(input.sessionId, chapterId);
-  }
-
-  // 8. Hand extraction back as a promise. Caller is responsible for
-  //    awaiting (e.g. API routes via Next's `after()`). Failures here
-  //    should not crash the turn — log and move on.
+  // 7. Write captured profile fields to the DB in the background
   const finalize: Promise<ExtractionFinalizeSummary> = (async () => {
     try {
-      const extraction = await extractFromUserMessage({
-        userMessage: input.userMessage,
-        chapterId,
-        openFieldKeys,
-        currentProfile,
-        lastAvaMessage,
-      });
-      const extraction_latency_ms = Date.now() - turnStartedAt;
+      const extraction = capturedToExtraction(rawOutput.captured);
+      if (extraction.profile_updates.length === 0) {
+        return {
+          extraction_latency_ms: 0,
+          extraction_parse_ok: true,
+          profile_fields_written: 0,
+          entities_written: 0,
+          notes_written: 0,
+          profile_completion: 0,
+        };
+      }
 
       const summary = await applyExtractionResult({
         userId: input.userId,
         extraction,
         sourceMessageId: userMsgRow.id,
+        minConfidence: 0.5,
       });
 
       const stillOpen = await getOpenFieldKeys(input.userId);
@@ -1397,44 +1408,44 @@ ${voice.text}`,
       }
 
       return {
-        extraction_latency_ms,
-        extraction_parse_ok: extraction.parse_ok,
+        extraction_latency_ms: Date.now() - turnStartedAt,
+        extraction_parse_ok: true,
         profile_fields_written: summary.profile_fields_written,
         entities_written: summary.entities_written,
         notes_written: summary.notes_written,
         profile_completion: summary.profile_completion,
       };
     } catch (err) {
-      console.error('[ava.runTurn] extraction finalize failed:', err);
+      console.error('[ava.runTurn] finalize failed', { err });
       return {
         extraction_latency_ms: Date.now() - turnStartedAt,
         extraction_parse_ok: false,
         profile_fields_written: 0,
         entities_written: 0,
         notes_written: 0,
-        profile_completion: currentProfile
-          ? Object.values(currentProfile).filter((v) => v !== null && v !== '').length /
-            Object.keys(AVA_PROFILE_FIELDS).length
-          : 0,
+        profile_completion:
+          Object.values(snapshot).filter((v) => v !== null && v !== '').length /
+          Math.max(Object.keys(AVA_PROFILE_FIELDS).length, 1),
       };
     }
   })();
 
   return {
-    reply: replyText,
+    reply: voice.text,
     reply_message_id: avaMessage.id,
     turn_index: userTurnIndex + 1,
     chapter_id: chapterId,
-    chapter_changed,
+    chapter_changed: false,
     chat_latency_ms,
-    prompt_version: AVA_PROMPT_VERSION,
-    turn_plan: turnPlan,
+    prompt_version: `${AVA_PROMPT_VERSION}/unified`,
+    turn_plan: null,
     reply_quality: {
-      ok: quality.ok,
-      issues: quality.issues,
-      retried: qualityRetried,
+      ok: true,
+      issues: [],
+      retried: false,
     },
-    allow_gif: allowGif,
+    allow_gif: rawOutput.gif_cue !== null,
+    gif_cue: rawOutput.gif_cue,
     finalize,
   };
 }
