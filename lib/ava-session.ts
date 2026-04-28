@@ -26,6 +26,7 @@
  */
 
 import { generateText } from 'ai';
+import { runSimpleExtraction } from './ava-extract-simple';
 import {
   AVA_CHAPTERS,
   AVA_CONVERSATION_ROUTES,
@@ -1494,4 +1495,151 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     gif_cue: rawOutput.gif_cue,
     finalize,
   };
+}
+
+// ============================================
+// STREAMING TURN (twin-pass: stream reply + background extraction)
+// ============================================
+
+export interface PreparedTurn {
+  userMsgId: string;
+  userTurnIndex: number;
+  avaTurnIndex: number;
+  chapterId: string;
+  openFieldKeys: string[];
+  lastAvaMessage: string | null;
+  systemPrompt: string;
+  userPrompt: string;
+  gifCue: string | null;
+}
+
+/**
+ * Deterministically pick the most appropriate GIF cue without the LLM.
+ * Called before streaming so the cue travels in response headers immediately.
+ */
+export function computeGifCue(
+  userMessage: string,
+  avaTurnIndex: number,
+  openFieldKeys: string[],
+): string | null {
+  const u = userMessage.toLowerCase().trim();
+  if (/\b(bye|goodbye|gotta go|talk later|take care|ttyl|see ya)\b/.test(u)) return 'farewell';
+  if (avaTurnIndex === 2) return 'name_reaction';
+  if (
+    openFieldKeys.includes('current_location_text') &&
+    u.length <= 60 &&
+    /^[a-z ,.'()\-]+$/.test(u)
+  ) return 'hey_there';
+  if (/\b(miss|missing|homesick|far from|too long|sad|hard|tough|lonely|grief)\b/.test(u)) return 'empathy';
+  if (/\b(seine|bay|carnival|soca|pan|liming|doubles|castara|buccoo|speyside)\b/.test(u)) return 'local_vibes';
+  if (/[!]{2,}|\b(love it|amazing|finally|yes yes|excited)\b/.test(u)) return 'celebration';
+  if (avaTurnIndex % 2 === 0) return 'hey_there';
+  return null;
+}
+
+/**
+ * Pre-flight for a streaming turn:
+ *  - Persists the user message (DB write before LLM starts)
+ *  - Loads conversation context (history, profile snapshot, open fields)
+ *  - Builds the per-turn user prompt
+ *  - Computes the gif_cue deterministically
+ *
+ * Called BEFORE streamText so all DB reads are complete before the
+ * stream begins, avoiding contention with the streaming response.
+ */
+export async function prepareTurn(input: RunTurnInput): Promise<PreparedTurn> {
+  const user = await getAvaUserById(input.userId);
+  if (!user) throw new Error(`ava_user not found: ${input.userId}`);
+
+  const userTurnIndex = await getNextTurnIndex(input.sessionId);
+  const userMsgRow = await insertUserMessage({
+    sessionId: input.sessionId,
+    userId: input.userId,
+    content: input.userMessage,
+    turnIndex: userTurnIndex,
+  });
+
+  const [history, snapshot, openFieldKeys] = await Promise.all([
+    safeRead('getFullSessionHistory', getFullSessionHistory(input.sessionId), [] as AvaMessage[]),
+    safeRead('getProfileSnapshot', getProfileSnapshot(input.userId), {} as Record<string, string | string[] | number | null>),
+    safeRead('getOpenFieldKeys', getOpenFieldKeys(input.userId), Object.keys(AVA_PROFILE_FIELDS)),
+  ]);
+
+  const chapterId = chapterFromOpenFields(openFieldKeys);
+  const lastAvaMessage =
+    [...history].reverse().find((m) => m.sender === 'ava')?.content ?? null;
+
+  const userPrompt = buildUnifiedUserPrompt({
+    userName: user.name,
+    userMessage: input.userMessage,
+    history,
+    snapshot,
+    openFieldKeys,
+    turnIndex: userTurnIndex,
+  });
+
+  return {
+    userMsgId: userMsgRow.id,
+    userTurnIndex,
+    avaTurnIndex: userTurnIndex + 1,
+    chapterId,
+    openFieldKeys,
+    lastAvaMessage,
+    systemPrompt: AVA_SYSTEM_PROMPT, // pure persona — no JSON extraction addendum
+    userPrompt,
+    gifCue: computeGifCue(input.userMessage, userTurnIndex + 1, openFieldKeys),
+  };
+}
+
+/**
+ * Post-stream: applies voice post-processing, persists Ava's reply to the DB,
+ * and fires background extraction. Designed to run inside next/server `after()`
+ * so it survives after the streaming response has been sent to the client.
+ */
+export async function persistAvaReply(params: {
+  sessionId: string;
+  userId: string;
+  userMessage: string;
+  rawText: string;
+  avaTurnIndex: number;
+  chapterId: string;
+  startedAt: number;
+  userMsgId: string;
+  openFieldKeys: string[];
+  lastAvaMessage: string | null;
+}): Promise<void> {
+  const voice = postProcessAvaReply(params.rawText);
+  if (voice.edited) {
+    console.log('[ava.stream] voice post-process edited', {
+      removed: voice.removed_phrases,
+    });
+  }
+
+  await insertAvaMessage({
+    sessionId: params.sessionId,
+    userId: params.userId,
+    content: voice.text,
+    turnIndex: params.avaTurnIndex,
+    isSystemDelivered: false,
+    modelProvider: 'openai',
+    modelId: 'streaming',
+    chapterId: params.chapterId,
+    latencyMs: Date.now() - params.startedAt,
+  });
+
+  void runSimpleExtraction({
+    userId: params.userId,
+    userMessage: params.userMessage,
+    avaReply: voice.text,
+    lastAvaQuestion: params.lastAvaMessage,
+    openFieldKeys: params.openFieldKeys,
+    sourceMessageId: params.userMsgId,
+  }).catch((err) =>
+    console.error('[ava.stream] background extraction failed (non-fatal)', err),
+  );
+
+  const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
+  if (stillOpen !== null && stillOpen.length === 0) {
+    await setSessionStatus(params.sessionId, 'complete').catch(console.error);
+  }
 }

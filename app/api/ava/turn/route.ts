@@ -1,125 +1,120 @@
 /**
- * POST /api/ava/turn
+ * POST /api/ava/turn  —  streaming twin-pass architecture
  *
- * Run one turn of an Ava conversation end-to-end. The twin-pass happens
- * inside the orchestrator: chat reply + structured extraction fire in
- * parallel, both await before the response returns.
+ * Returns a plain-text stream of Ava's reply so the client can render
+ * characters as they arrive (≈300 ms to first token vs. ≈3 s for a full
+ * JSON response).  Metadata the client needs immediately travels in
+ * custom response headers, readable before the body stream starts.
  *
- *   Request:
- *     {
- *       session_id: string,   // uuid of ava_sessions.id
- *       user_id: string,      // uuid of ava_users.id
- *       message: string,
- *     }
+ * Parallel to the stream, an `after()` background task persists Ava's
+ * reply and kicks off a lightweight GPT-4o-mini extraction pass so
+ * nothing blocks the user-visible response.
  *
- *   Response:
- *     {
- *       reply: string,
- *       reply_message_id: string,
- *       turn_index: number,
- *       chapter_id: string,
- *       chapter_changed: boolean,
- *       profile_completion: number,
- *       meta: {
- *         chat_latency_ms: number,
- *         extraction_latency_ms: number,
- *         extraction_parse_ok: boolean,
- *         profile_fields_written: number,
- *         entities_written: number,
- *         notes_written: number,
- *       },
- *     }
+ * Headers returned:
+ *   X-Gif-Cue      — one of the known GIF cue strings, or empty
+ *   X-Turn-Index   — integer: Ava's turn_index for this reply
+ *   X-Chapter-Id   — current chapter slug (for debug / analytics)
+ *
+ * Request body:
+ *   { session_id: string, user_id: string, message: string }
  */
 
-import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
-import { runTurn } from '@/lib/ava-session';
+import { NextRequest, NextResponse } from 'next/server';
+import { createTextStreamResponse, streamText } from 'ai';
 import { getAvaSessionById, getAvaUserById } from '@/lib/ava-db';
+import { getAvaChatModel } from '@/lib/ava-model';
+import { prepareTurn, persistAvaReply } from '@/lib/ava-session';
 
-// The unified LLM call returns the GIF cue directly, so no client-side
-// classification is needed. The `after()` hook persists captured fields.
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  // ── 1. Parse & validate request ──────────────────────────────────────
+  let body: Record<string, unknown> = {};
   try {
-    const body = await request.json().catch(() => ({}));
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+  }
 
-    const session_id = typeof body.session_id === 'string' ? body.session_id : null;
-    const user_id = typeof body.user_id === 'string' ? body.user_id : null;
-    const message = typeof body.message === 'string' ? body.message.trim() : '';
+  const session_id = typeof body.session_id === 'string' ? body.session_id : null;
+  const user_id = typeof body.user_id === 'string' ? body.user_id : null;
+  const message = typeof body.message === 'string' ? body.message.trim() : '';
 
-    if (!session_id || !user_id || !message) {
-      return NextResponse.json(
-        { error: 'session_id, user_id, and message are required' },
-        { status: 400 },
-      );
-    }
-
-    // Sanity-check the session and user exist and agree
-    const [session, user] = await Promise.all([
-      getAvaSessionById(session_id),
-      getAvaUserById(user_id),
-    ]);
-
-    if (!session) {
-      return NextResponse.json({ error: 'session_not_found' }, { status: 404 });
-    }
-    if (!user) {
-      return NextResponse.json({ error: 'user_not_found' }, { status: 404 });
-    }
-    if (session.user_id !== user_id) {
-      return NextResponse.json({ error: 'session_user_mismatch' }, { status: 403 });
-    }
-    if (session.status !== 'active') {
-      return NextResponse.json(
-        { error: `session_status_${session.status}` },
-        { status: 409 },
-      );
-    }
-
-    const result = await runTurn({
-      sessionId: session_id,
-      userId: user_id,
-      userMessage: message,
-    });
-
-    // Let the structured extraction finish after we've returned Ava's reply
-    // to the client. On Vercel/Next.js, `after()` keeps the function alive
-    // long enough for this to complete.
-    after(async () => {
-      try {
-        const summary = await result.finalize;
-        console.log('[ava/turn] profile fields saved', {
-          session_id,
-          turn_index: result.turn_index,
-          fields: summary.profile_fields_written,
-          latency_ms: summary.extraction_latency_ms,
-        });
-      } catch (err) {
-        console.error('[ava/turn] finalize threw:', err);
-      }
-    });
-
-    return NextResponse.json({
-      reply: result.reply,
-      reply_message_id: result.reply_message_id,
-      turn_index: result.turn_index,
-      chapter_id: result.chapter_id,
-      chapter_changed: result.chapter_changed,
-      gif_cue: result.gif_cue,
-      meta: {
-        chat_latency_ms: result.chat_latency_ms,
-        prompt_version: result.prompt_version,
-        turn_plan: result.turn_plan,
-        reply_quality: result.reply_quality,
-        allow_gif: result.allow_gif,
-      },
-    });
-  } catch (err) {
-    console.error('[ava/turn POST] failed:', err);
+  if (!session_id || !user_id || !message) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'turn_failed' },
-      { status: 500 },
+      { error: 'session_id, user_id, and message are required' },
+      { status: 400 },
     );
   }
+
+  // ── 2. Verify session + user ──────────────────────────────────────────
+  const [session, user] = await Promise.all([
+    getAvaSessionById(session_id),
+    getAvaUserById(user_id),
+  ]);
+
+  if (!session) return NextResponse.json({ error: 'session_not_found' }, { status: 404 });
+  if (!user) return NextResponse.json({ error: 'user_not_found' }, { status: 404 });
+  if (session.user_id !== user_id) {
+    return NextResponse.json({ error: 'session_user_mismatch' }, { status: 403 });
+  }
+  if (session.status !== 'active') {
+    return NextResponse.json({ error: `session_status_${session.status}` }, { status: 409 });
+  }
+
+  // ── 3. Pre-flight: persist user message + load all context ───────────
+  //    All DB reads happen here, before the LLM call, so the stream
+  //    starts cleanly with no competing DB work.
+  let prepared;
+  try {
+    prepared = await prepareTurn({ sessionId: session_id, userId: user_id, userMessage: message });
+  } catch (err) {
+    console.error('[ava/turn] prepareTurn failed:', err);
+    return NextResponse.json({ error: 'turn_setup_failed' }, { status: 500 });
+  }
+
+  // ── 4. Start the streaming reply ────────────────────────────────────
+  const { model } = getAvaChatModel();
+  const startedAt = Date.now();
+
+  const result = streamText({
+    model,
+    system: prepared.systemPrompt,
+    prompt: prepared.userPrompt,
+    providerOptions: {
+      openai: { reasoningEffort: 'low' },
+    },
+  });
+
+  // ── 5. After the stream is consumed: persist reply + extract fields ──
+  after(async () => {
+    try {
+      const fullText = await result.text;
+      await persistAvaReply({
+        sessionId: session_id,
+        userId: user_id,
+        userMessage: message,
+        rawText: fullText,
+        avaTurnIndex: prepared.avaTurnIndex,
+        chapterId: prepared.chapterId,
+        startedAt,
+        userMsgId: prepared.userMsgId,
+        openFieldKeys: prepared.openFieldKeys,
+        lastAvaMessage: prepared.lastAvaMessage,
+      });
+    } catch (err) {
+      console.error('[ava/turn] after() persist failed:', err);
+    }
+  });
+
+  // ── 6. Stream the reply with metadata in headers ─────────────────────
+  return createTextStreamResponse({
+    textStream: result.textStream,
+    headers: {
+      'X-Gif-Cue': prepared.gifCue ?? '',
+      'X-Turn-Index': String(prepared.avaTurnIndex),
+      'X-Chapter-Id': prepared.chapterId,
+    },
+  });
 }

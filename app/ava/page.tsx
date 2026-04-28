@@ -120,14 +120,11 @@ interface SessionOpenResponse {
   chapter_id: string | null;
 }
 
-interface TurnResponse {
-  reply: string;
-  reply_message_id: string;
-  turn_index: number;
-  chapter_id: string;
-  chapter_changed: boolean;
+/** Metadata carried in X-* response headers from the streaming turn route. */
+interface TurnStreamMeta {
   gif_cue: GifCue | null;
-  meta: { chat_latency_ms: number };
+  turn_index: number;
+  chapter_id: string | null;
 }
 
 /**
@@ -416,7 +413,7 @@ export default function AvaPage() {
         // Deliberately do NOT persist the session token to localStorage.
         // Every page load starts a fresh conversation from the opener.
 
-        // Now send the user's first message as turn 1.
+        // Now send the user's first message as turn 1 (streaming).
         const turnRes = await fetch('/api/ava/turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -430,21 +427,67 @@ export default function AvaPage() {
           const body = await turnRes.json().catch(() => ({}));
           throw new Error(body.error || `turn failed (${turnRes.status})`);
         }
-        const turnData: TurnResponse = await turnRes.json();
 
-        setChapter(turnData.chapter_id);
+        const meta: TurnStreamMeta = {
+          gif_cue: (turnRes.headers.get('x-gif-cue') || null) as GifCue | null,
+          turn_index: parseInt(turnRes.headers.get('x-turn-index') || '0', 10),
+          chapter_id: turnRes.headers.get('x-chapter-id') || null,
+        };
+        if (meta.chapter_id) setChapter(meta.chapter_id);
 
-        // Upgrade the user's ticks to read.
         setMessages((prev) =>
           prev.map((m) => (m.id === optimisticId ? { ...m, read: true } : m)),
         );
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, 180));
         setAvaTyping(false);
 
-        await appendAvaReply(turnData.reply);
+        const streamId = `ava-stream-first-${Date.now()}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: streamId,
+            sender: 'ava',
+            kind: 'text',
+            content: '',
+            timestamp: new Date(),
+            animate: true,
+            typewriter: false,
+          },
+        ]);
 
-        if (turnData.gif_cue) {
-          void playGif(turnData.gif_cue, (m) =>
+        const reader = turnRes.body!.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        let rafPending = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+          if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(() => {
+              const snap = accumulated;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === streamId ? { ...m, content: snap } : m)),
+              );
+              rafPending = false;
+            });
+          }
+        }
+        accumulated += decoder.decode();
+
+        const finalText = accumulated.trim();
+        const tone = detectTone(finalText);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === streamId
+              ? { ...m, content: finalText || '...', tone, isHero: tone !== undefined }
+              : m,
+          ),
+        );
+
+        if (meta.gif_cue) {
+          void playGif(meta.gif_cue, (m) =>
             setMessages((prev) => [...prev, m]),
           );
         }
@@ -460,7 +503,7 @@ export default function AvaPage() {
   );
 
   // =========================================================
-  // In-session: normal turn loop.
+  // In-session: streaming turn loop.
   // =========================================================
   const sendTurn = useCallback(
     async (text: string) => {
@@ -498,24 +541,83 @@ export default function AvaPage() {
             message: text.trim(),
           }),
         });
+
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `turn failed (${res.status})`);
+          // Non-streaming error — read JSON body
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || `turn failed (${res.status})`);
         }
-        const data: TurnResponse = await res.json();
 
-        setChapter(data.chapter_id);
+        // Read metadata from response headers (available before body is consumed)
+        const meta: TurnStreamMeta = {
+          gif_cue: (res.headers.get('x-gif-cue') || null) as GifCue | null,
+          turn_index: parseInt(res.headers.get('x-turn-index') || '0', 10),
+          chapter_id: res.headers.get('x-chapter-id') || null,
+        };
 
+        if (meta.chapter_id) setChapter(meta.chapter_id);
+
+        // Mark user message as read
         setMessages((prev) =>
           prev.map((m) => (m.id === optimisticId ? { ...m, read: true } : m)),
         );
-        await new Promise((r) => setTimeout(r, 300));
 
+        // Brief pause then switch from typing indicator to live bubble
+        await new Promise((r) => setTimeout(r, 180));
         setAvaTyping(false);
-        await appendAvaReply(data.reply, data.reply_message_id);
 
-        if (data.gif_cue) {
-          void playGif(data.gif_cue, (m) => setMessages((prev) => [...prev, m]));
+        // Insert a streaming bubble with empty content — it grows as chunks arrive
+        const streamId = `ava-stream-${Date.now()}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: streamId,
+            sender: 'ava',
+            kind: 'text',
+            content: '',
+            timestamp: new Date(),
+            animate: true,
+            typewriter: false, // content fills live via state updates
+          },
+        ]);
+
+        // Read the stream, batching state updates via requestAnimationFrame
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        let rafPending = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+
+          if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(() => {
+              const snap = accumulated;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === streamId ? { ...m, content: snap } : m)),
+              );
+              rafPending = false;
+            });
+          }
+        }
+        accumulated += decoder.decode(); // final flush
+
+        // Finalize: apply tone glow on the now-complete bubble
+        const finalText = accumulated.trim();
+        const tone = detectTone(finalText);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === streamId
+              ? { ...m, content: finalText || '...', tone, isHero: tone !== undefined }
+              : m,
+          ),
+        );
+
+        if (meta.gif_cue) {
+          void playGif(meta.gif_cue, (m) => setMessages((prev) => [...prev, m]));
         }
       } catch (err) {
         setAvaTyping(false);
