@@ -251,23 +251,100 @@ async function safeRead<T>(label: string, task: Promise<T>, fallback: T): Promis
   }
 }
 
-function fallbackAvaReplyForModelFailure(turnPlan: AvaTurnPlan): string {
+/**
+ * Called when the chat model times out or throws. Must ALWAYS return a
+ * coherent reply that acknowledges the user and advances the conversation
+ * with the next required question. "We can keep it easy." and any other
+ * no-question shape are strictly banned here — a model failure is not a
+ * reason to abandon the turn.
+ */
+function fallbackAvaReplyForModelFailure(
+  turnPlan: AvaTurnPlan,
+  openFieldKeys: string[],
+): string {
+  const nextQ = fallbackNextQuestion(turnPlan.next_best_question_focus, openFieldKeys);
+
   if (turnPlan.moment_type === 'life_decision') {
-    return 'I hear you on that. Good that you made space for yourself. We can sit with that for a second.';
+    return nextQ
+      ? `I hear you on that. Good that you made space for yourself. ${nextQ}`
+      : 'I hear you on that. Good that you made space for yourself. What were you hoping to find when you made that move?';
   }
   if (turnPlan.moment_type === 'career_achievement') {
     const named = turnPlan.specifics_to_name[0];
-    return named
-      ? `${named}, got it. That gives me enough on the work side for now.`
-      : 'That gives me enough on the work side for now.';
+    const ack = named ? `${named}, solid.` : 'Got it.';
+    return nextQ ? `${ack} ${nextQ}` : `${ack} What kind of work fills most of your time these days?`;
   }
   if (turnPlan.moment_type === 'question_to_ava') {
-    return "Fair question. I'm here to understand your Tobago story through conversation, not to run you through a form.";
+    return nextQ
+      ? `Good question — I'm here to understand your Tobago story. ${nextQ}`
+      : "Good question — I'm here just to understand your Tobago story through conversation.";
   }
-  if (turnPlan.should_ask_question === false) {
-    return 'I hear you. We can keep it easy.';
-  }
-  return 'I hear you. Mind me asking what part of that matters most to you?';
+  // Default: always advance — no "keep it easy", no dead ends.
+  return nextQ ? `Got it. ${nextQ}` : 'Got it. What part of Tobago do your roots come from?';
+}
+
+/**
+ * Pick the best next-question string for a fallback reply.
+ * Checks the planner's declared focus first, then walks the required
+ * field order. Returns null only when the profile is genuinely complete.
+ */
+function fallbackNextQuestion(
+  focus: string | null,
+  openFieldKeys: string[],
+): string | null {
+  const FOCUS_MAP: Record<string, string> = {
+    'their Tobago roots / generation':
+      'How far back does your Tobago side go — born there or parents, grandparents?',
+    'where in the world they are based now':
+      'Where in the world are you based?',
+    'whether they lived in or visited Tobago, and how often they return':
+      'Did you ever live in Tobago yourself, or mostly visit?',
+    'their work / what fills their days':
+      'What kind of work are you in these days?',
+    'their specific role, company, or kind of work':
+      'What kind of work are you in these days?',
+    connection_score:
+      "On a gut level, how tuned in are you to what's happening in Tobago these days?",
+    contribution_modes:
+      'If the runway was there, what would you want to give back to Tobago — time, knowledge, money, reach?',
+    invest_intent:
+      'Would you ever put money behind something in Tobago, or is that not your lane?',
+    barriers:
+      "What's the biggest thing in the way of contributing more to Tobago?",
+    feature_priorities:
+      'If there was an online space built for the diaspora, what would make it useful enough to actually come back to?',
+    trust_text:
+      'What would it take for you to truly trust a platform like this?',
+    future_roles:
+      'Would you want in on anything future-facing — advisory, surveys, pilots, or rather just stay informed?',
+    opportunity_text:
+      "Last one — where do you see the real opportunity for Tobago's economic growth?",
+  };
+  if (focus && FOCUS_MAP[focus]) return FOCUS_MAP[focus];
+
+  const FIELD_QUESTIONS: Partial<Record<string, string>> = {
+    current_location_text: 'Where in the world are you based?',
+    generation: 'How far back does your Tobago side go — born there or parents, grandparents?',
+    visit_frequency: 'How often do you make it back to Tobago?',
+    industry: 'What kind of work are you in these days?',
+    profession_text: 'What kind of work are you in these days?',
+    connection_score: "On a gut level, how tuned in are you to what's happening in Tobago?",
+    contribution_modes: 'What would you want to give back to Tobago if the runway was there?',
+    invest_intent: 'Would you ever put money behind something in Tobago?',
+    barriers: "What's the biggest thing in the way of contributing more?",
+    feature_priorities: 'What would make an online diaspora space useful enough for you to return to?',
+    trust_text: 'What would it take for you to truly trust a platform like this?',
+    future_roles: 'Would you want in on any future initiatives?',
+    opportunity_text: "Where's Tobago's real shot at economic growth, in your eyes?",
+  };
+  const RECOVERY_ORDER = [
+    'current_location_text', 'generation', 'visit_frequency', 'industry',
+    'profession_text', 'connection_score', 'contribution_modes', 'invest_intent',
+    'barriers', 'feature_priorities', 'trust_text', 'future_roles', 'opportunity_text',
+  ];
+  const nextField = RECOVERY_ORDER.find((f) => openFieldKeys.includes(f));
+  if (nextField && FIELD_QUESTIONS[nextField]) return FIELD_QUESTIONS[nextField]!;
+  return null;
 }
 
 function firstName(name: string): string {
@@ -495,10 +572,33 @@ function fastReplyForTurnPlan(
   turnPlan: AvaTurnPlan,
   userName: string,
   userMessage: string,
+  openFieldKeys: string[],
 ): string | null {
   if (turnPlan.next_best_question_focus === 'profile complete / graceful close') {
     return 'I have a much better sense of you now. The way you spoke about where you are, your Tobago roots, and what you would want to see for the island gives me plenty to hold onto.';
   }
+
+  // Onboarding safety net: a short, plain-text reply during the early
+  // location or roots phase is almost always the user answering the
+  // question just asked — not a random aside. If the turn planner
+  // missed it (wrong phrasing in last Ava message, etc.), apply the
+  // deterministic template here so the LLM is never called for this
+  // and a timeout can never cause a dead-end "keep it easy" response.
+  if (
+    turnPlan.moment_type === 'short_reply' &&
+    /^[A-Za-z ,.'()\-]+$/.test(userMessage.trim())
+  ) {
+    const answer = cleanShortAnswer(userMessage);
+    if (openFieldKeys.includes('current_location_text')) {
+      const quip = getLocationQuip(answer);
+      const locReaction = quip ?? `${answer}, got it.`;
+      return `${locReaction} How far back does your Tobago side go — were you born there or is it parents, grandparents?`;
+    }
+    if (openFieldKeys.includes('generation') && !openFieldKeys.includes('current_location_text')) {
+      return 'Got it. Did you ever live in Tobago yourself, or mostly visit growing up?';
+    }
+  }
+
   if (turnPlan.moment_type === 'logistical_answer') {
     const answer = cleanShortAnswer(userMessage);
     if (turnPlan.next_best_question_focus === 'their work / what fills their days') {
@@ -1137,7 +1237,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   let chatResult: Awaited<ReturnType<typeof generateText>> | null = null;
   let modelProvider: string | null = null;
   let modelId: string | null = null;
-  let rawReplyText = forcedReply ?? fastReplyForTurnPlan(turnPlan, user.name, input.userMessage) ?? '';
+  let rawReplyText = forcedReply ?? fastReplyForTurnPlan(turnPlan, user.name, input.userMessage, openFieldKeys) ?? '';
   const usedFastReply = rawReplyText.length > 0;
 
   if (usedFastReply) {
@@ -1176,7 +1276,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       });
       modelProvider = 'system';
       modelId = `${AVA_PROMPT_VERSION}/fallback`;
-      rawReplyText = fallbackAvaReplyForModelFailure(turnPlan);
+      rawReplyText = fallbackAvaReplyForModelFailure(turnPlan, openFieldKeys);
     }
   }
   const chat_latency_ms = Date.now() - turnStartedAt;

@@ -487,10 +487,25 @@ export function planAvaTurn(params: {
       next_best_question_focus = 'the smallest natural return question after answering them';
       break;
     case 'short_reply':
-      reply_shape = 'sit_no_question';
-      should_ask_question = false;
-      question_softness = 'no_question';
-      next_best_question_focus = null;
+      // During onboarding (location or roots still open), a short plain-
+      // text reply is almost certainly an answer, not an aside. Keep a
+      // question in the plan so the LLM or the fast-reply safety net
+      // always advances the conversation. Only truly suppress the question
+      // once the early onboarding fields are filled.
+      if (
+        params.openFieldKeys.includes('current_location_text') ||
+        params.openFieldKeys.includes('generation')
+      ) {
+        reply_shape = 'recover_to_profile_ask';
+        should_ask_question = true;
+        question_softness = 'soft';
+        next_best_question_focus = nextRequiredProfileField(params.openFieldKeys);
+      } else {
+        reply_shape = 'sit_no_question';
+        should_ask_question = false;
+        question_softness = 'no_question';
+        next_best_question_focus = null;
+      }
       break;
     case 'place_memory':
       reply_shape = 'place_memory_then_ask';
