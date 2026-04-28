@@ -4,6 +4,70 @@ import { NextRequest, NextResponse } from 'next/server';
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
 
 // ============================================
+// SEARCH MODE (preferred for Ava cues)
+// For these cues, we query Giphy's /search with a rotating family of
+// queries and pick a random result from the top 50. Every call hits a
+// different slice of Giphy, so the same GIF almost never repeats across
+// sessions — the curated hardcoded pools below are used as a safety net
+// only when search returns nothing.
+// ============================================
+
+const SEARCH_QUERIES: Record<string, string[]> = {
+  welcome: [
+    'friendly wave hello',
+    'warm hello smile',
+    'happy greeting hi',
+    'hi there wave cute',
+    'welcome back hug',
+    'excited hello wave',
+    'caribbean hello wave',
+    'hello animated cute',
+  ],
+  hey_there: [
+    'hey there wave',
+    'hi friend wave',
+    'hello greeting cute',
+    'nice to meet you wave',
+    'friendly hi',
+  ],
+  local_vibes: [
+    'tropical vibes',
+    'caribbean chill',
+    'island life',
+    'beach vibes good',
+    'good vibes sunshine',
+    'relaxed sunny day',
+  ],
+  empathy: [
+    'i hear you',
+    'empathy listening',
+    'i understand you',
+    'gentle nod support',
+    'sympathetic hug',
+    'thinking of you hug',
+  ],
+  celebration: [
+    'celebration confetti happy',
+    'we did it cheer',
+    'yay celebration',
+    'party time celebrate',
+    'happy dance confetti',
+  ],
+  farewell: [
+    'goodbye wave cute',
+    'see you later wave',
+    'bye bye wave',
+    'until next time wave',
+  ],
+  welcome_back: [
+    'welcome back hug',
+    'missed you reunion',
+    'long time no see hug',
+    'so happy to see you',
+  ],
+};
+
+// ============================================
 // PRE-APPROVED, CURATED GIF IDs
 // Quirky, family-friendly, NO romantic vibes
 // Each ID appears in EXACTLY ONE category
@@ -209,6 +273,39 @@ const CURATED_GIFS: Record<string, string[]> = {
   ],
 };
 
+/**
+ * Fetch a GIF via Giphy search with a random rotating query. This is
+ * the preferred path for conversational cues because it gives us a huge
+ * pool of fresh results every call — curated IDs are only used as a
+ * fallback when search fails.
+ */
+async function fetchViaSearch(type: string) {
+  const queries = SEARCH_QUERIES[type];
+  if (!queries || queries.length === 0) return null;
+
+  const query = queries[Math.floor(Math.random() * queries.length)];
+  const url =
+    `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}` +
+    `&q=${encodeURIComponent(query)}&limit=50&rating=pg&lang=en&bundle=messaging_non_clips`;
+
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!Array.isArray(data?.data) || data.data.length === 0) return null;
+
+  // Pick a random result from the returned slate. The random offset +
+  // random query combination means repeats are extremely unlikely.
+  const pick = data.data[Math.floor(Math.random() * data.data.length)];
+  if (!pick?.images?.fixed_height?.url) return null;
+
+  return {
+    url: pick.images.fixed_height.url,
+    width: pick.images.fixed_height.width,
+    height: pick.images.fixed_height.height,
+    title: pick.title as string,
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Check if API key is configured
@@ -219,6 +316,15 @@ export async function GET(request: NextRequest) {
     
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || 'excited';
+
+    // Search-mode first: gives maximum variety across sessions.
+    if (SEARCH_QUERIES[type]) {
+      const fromSearch = await fetchViaSearch(type);
+      if (fromSearch) {
+        return NextResponse.json(fromSearch);
+      }
+      // fall through to curated
+    }
 
     // Get curated GIF IDs for this type
     const gifIds = CURATED_GIFS[type] || CURATED_GIFS.excited;

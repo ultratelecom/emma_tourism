@@ -570,6 +570,183 @@ h1, h2, h3, h4, h5, h6 {
   animation: heart-pop 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
 }
 
+/* Waving hand — used once, on Ava's opening "hi" bubble. Loops a
+   handful of times then rests so it doesn't draw attention forever. */
+@keyframes wave-hand {
+  0% { transform: rotate(0deg); }
+  10% { transform: rotate(14deg); }
+  20% { transform: rotate(-8deg); }
+  30% { transform: rotate(14deg); }
+  40% { transform: rotate(-4deg); }
+  50% { transform: rotate(10deg); }
+  60%, 100% { transform: rotate(0deg); }
+}
+
+.animate-wave-hand {
+  animation: wave-hand 2.4s ease-in-out 2;
+  transform-origin: 70% 70%;
+}
+
+/* ================================================================
+   Bubble-level poetry — shimmer sweep, tone tints, hero entrance
+   ================================================================ */
+
+/* Diagonal highlight that sweeps across the bubble exactly once on
+   entry. We overlay via a pseudo-element positioned absolutely
+   inside the bubble's clipping region. The bubble itself must be
+   position: relative and overflow: hidden for this to work. */
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-120%) skewX(-18deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(260%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+.shimmer-bubble {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.shimmer-bubble::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 200, 150, 0.45) 48%,
+    rgba(255, 240, 220, 0.65) 52%,
+    transparent 70%
+  );
+  mix-blend-mode: overlay;
+  animation: shimmer-sweep 1.6s cubic-bezier(0.4, 0, 0.2, 1) 0.25s 1 both;
+  z-index: 1;
+}
+
+/* Tone tints — a soft colored glow behind the bubble keyed to the
+   content Ava is speaking about. Subtle on purpose: this is a
+   watercolor wash, not a highlighter. */
+.tone-ocean {
+  box-shadow:
+    0 0 0 1px rgba(33, 131, 177, 0.18),
+    0 6px 22px -8px rgba(33, 131, 177, 0.4);
+}
+
+.tone-palm {
+  box-shadow:
+    0 0 0 1px rgba(45, 139, 96, 0.2),
+    0 6px 22px -8px rgba(45, 139, 96, 0.4);
+}
+
+.tone-sunset {
+  box-shadow:
+    0 0 0 1px rgba(255, 140, 95, 0.22),
+    0 6px 22px -8px rgba(255, 140, 95, 0.45);
+}
+
+.tone-night {
+  box-shadow:
+    0 0 0 1px rgba(80, 100, 160, 0.22),
+    0 6px 22px -8px rgba(60, 80, 140, 0.4);
+}
+
+/* Typewriter caret — blinks while the bubble is still revealing. */
+@keyframes caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.typewriter-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  background: currentColor;
+  vertical-align: text-bottom;
+  opacity: 0.6;
+  animation: caret-blink 0.9s steps(1) infinite;
+}
+
+/* ================================================================
+   Heart arc to avatar — hearts detach from the user bubble after
+   they land, travel in a parabolic arc toward Ava's avatar, and
+   fade out as the avatar's ring "receives" them with a brief
+   coral pulse.
+   ================================================================ */
+
+/* The fly uses two CSS variables set inline: --dx / --dy (deltas in
+   px). Midpoint gets lifted upward (--lift) so the path arcs instead
+   of sliding in a straight line. Subtle rotation sells the weight. */
+@keyframes heart-fly-arc {
+  0% {
+    transform: translate(0, 0) scale(1.1) rotate(-6deg);
+    opacity: 0;
+  }
+  12% {
+    transform: translate(calc(var(--dx) * 0.12), calc(var(--dy) * 0.12 - 28px))
+      scale(1.25) rotate(-10deg);
+    opacity: 1;
+  }
+  45% {
+    transform: translate(calc(var(--dx) * 0.45), calc(var(--dy) * 0.45 - 58px))
+      scale(1.1) rotate(6deg);
+    opacity: 1;
+  }
+  75% {
+    transform: translate(calc(var(--dx) * 0.75), calc(var(--dy) * 0.75 - 34px))
+      scale(0.9) rotate(-3deg);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(var(--dx), var(--dy)) scale(0.35) rotate(0deg);
+    opacity: 0;
+  }
+}
+
+.animate-heart-fly {
+  animation: heart-fly-arc 1.15s cubic-bezier(0.32, 0.72, 0.4, 1) forwards;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 2px 6px rgba(255, 80, 80, 0.35));
+}
+
+/* When a heart lands on Ava's avatar, the ring pulses coral. Timed to
+   overlap with the tail end of the fly so the moment of arrival
+   feels kinetic — she is absorbing the heart. */
+@keyframes avatar-receive {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 120, 120, 0);
+    transform: scale(1);
+  }
+  35% {
+    box-shadow: 0 0 0 8px rgba(255, 120, 120, 0.35);
+    transform: scale(1.08);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(255, 120, 120, 0);
+    transform: scale(1.02);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 120, 120, 0);
+    transform: scale(1);
+  }
+}
+
+.avatar-receive {
+  animation: avatar-receive 0.9s cubic-bezier(0.3, 0.8, 0.4, 1);
+}
+
 /* Focus states - better for mobile */
 input:focus {
   outline: none;

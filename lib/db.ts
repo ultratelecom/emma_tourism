@@ -1,7 +1,46 @@
 import { neon } from '@neondatabase/serverless';
 
-// Create a SQL query function
-const sql = neon(process.env.DATABASE_URL!);
+// Create a SQL query function. Neon serverless uses fetch under the hood;
+// local/dev networks occasionally throw transient DNS/fetch failures
+// (e.g. ENOTFOUND api.<region>.aws.neon.tech). Retrying those prevents a
+// single flaky lookup from turning an Ava turn into a 500 after the user
+// already sent a message.
+const rawSql = neon(process.env.DATABASE_URL!);
+
+function isTransientDbError(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.message} ${(err as Error & { cause?: unknown }).cause ?? ''}` : String(err);
+  return /fetch failed|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network/i.test(message);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type NeonSql = typeof rawSql;
+type RetryingSql = NeonSql;
+
+async function retryQuery<T>(operation: () => Promise<T>): Promise<T> {
+  const delays = [0, 250, 750];
+  let lastErr: unknown;
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i] > 0) await wait(delays[i]);
+    try {
+      return await operation();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientDbError(err) || i === delays.length - 1) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) =>
+  retryQuery(() => rawSql(strings, ...values))) as RetryingSql;
+
+// Preserve Neon's `.unsafe()` API used by migration scripts. It returns
+// Neon's UnsafeRawSql object rather than a Promise, so we cannot wrap it
+// with retryQuery without changing its type/semantics.
+sql.unsafe = rawSql.unsafe;
 
 export interface Chat {
   id: string;
