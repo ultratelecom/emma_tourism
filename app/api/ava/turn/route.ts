@@ -83,12 +83,12 @@ function pickGifCue(
   if (turnIndex === 2) return 'name_reaction';
 
   // User just gave their location (next focus is roots / generation)
-  // → celebration-style GIF to match the warm quip Ava gives.
+  // → hey_there keeps the mood warm without risking random results.
   if (
     nextFocus &&
     (nextFocus.includes('Tobago roots') || nextFocus.includes('generation'))
   ) {
-    return 'celebration';
+    return 'hey_there';
   }
 
   // Empathy — the user expressed longing, hardship, being far.

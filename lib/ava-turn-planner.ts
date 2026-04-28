@@ -310,7 +310,7 @@ export function planAvaTurn(params: {
     !isQuestion &&
     message.length > 0 &&
     message.length <= 60 &&
-    /where in the world|where.*these days|based now|catching you/i.test(lastAvaMessage) &&
+    /where in the world|where.*these days|based now|catching you|where are you based|what part of the world|where do you live/i.test(lastAvaMessage) &&
     (specifics.places.length > 0 || /^[A-Za-z .'-]+$/.test(message));
   const isRootsAnswer =
     !isQuestion &&
