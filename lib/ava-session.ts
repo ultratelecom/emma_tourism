@@ -1650,19 +1650,26 @@ export async function persistAvaReply(params: {
     latencyMs: Date.now() - params.startedAt,
   });
 
-  void runSimpleExtraction({
-    userId: params.userId,
-    userMessage: params.userMessage,
-    avaReply: voice.text,
-    lastAvaQuestion: params.lastAvaMessage,
-    openFieldKeys: params.openFieldKeys,
-    sourceMessageId: params.userMsgId,
-  }).catch((err) =>
-    console.error('[ava.stream] background extraction failed (non-fatal)', err),
-  );
+  // Run extraction and check completion INSIDE the extraction promise (not after),
+  // so we don't race with stale openFieldKeys. Same fix as v2 race condition.
+  void (async () => {
+    try {
+      await runSimpleExtraction({
+        userId: params.userId,
+        userMessage: params.userMessage,
+        avaReply: voice.text,
+        lastAvaQuestion: params.lastAvaMessage,
+        openFieldKeys: params.openFieldKeys,
+        sourceMessageId: params.userMsgId,
+      });
 
-  const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
-  if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
-    await setSessionStatus(params.sessionId, 'complete').catch(console.error);
-  }
+      // CRITICAL: Check completion AFTER extraction finishes, not before.
+      const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
+      if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
+        await setSessionStatus(params.sessionId, 'complete').catch(console.error);
+      }
+    } catch (err) {
+      console.error('[ava.stream] background extraction failed (non-fatal)', err);
+    }
+  })();
 }

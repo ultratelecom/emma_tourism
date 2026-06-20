@@ -537,11 +537,13 @@ export async function persistAvaV2Reply(params: {
         sourceMessageId: params.userMsgId,
         recentHistory: history,
       });
+      
+      // CRITICAL: Check completion AFTER capture finishes, not before. Otherwise
+      // we read stale openFieldKeys and mark session complete prematurely (race condition).
+      const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
+      if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
+        await setSessionStatus(params.sessionId, 'complete').catch(console.error);
+      }
     })().catch((err) => console.error('[ava.v2] capture failed (non-fatal)', err)),
   ]);
-
-  const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
-  if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
-    await setSessionStatus(params.sessionId, 'complete').catch(console.error);
-  }
 }
