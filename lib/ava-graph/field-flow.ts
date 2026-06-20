@@ -1,4 +1,5 @@
 import type { AvaTurnPlan } from '../ava-turn-planner';
+import { AVA_PROFILE_FIELDS } from '../ava-config';
 
 export const AVA_REQUIRED_FIELD_ORDER = [
   'current_location_text',
@@ -24,14 +25,40 @@ export const AVA_REQUIRED_FIELD_ORDER = [
 
 export type AvaRequiredField = (typeof AVA_REQUIRED_FIELD_ORDER)[number];
 
+/**
+ * The next field Ava should ASK about. Soft-elicitation fields
+ * (current_city_region, current_country, age_bracket, gender,
+ * education_level) and companion fields (profession_text) are NEVER asked
+ * directly — they are inferred from what the user already said or captured
+ * passively by extraction. Asking them is what made Ava drill "which part of
+ * New York? which part of Brooklyn? which neighbourhood?" forever, and would
+ * make her ask the profession_text placeholder as a literal question.
+ */
 export function chooseNextRequiredField(
   openFieldKeys: string[],
   opts?: { skipWork?: boolean },
 ): string | null {
   const skip = new Set(opts?.skipWork ? ['industry', 'profession_text'] : []);
-  return AVA_REQUIRED_FIELD_ORDER.find(
-    (field) => openFieldKeys.includes(field) && !skip.has(field),
-  ) ?? null;
+  return AVA_REQUIRED_FIELD_ORDER.find((field) => {
+    if (!openFieldKeys.includes(field) || skip.has(field)) return false;
+    const spec = AVA_PROFILE_FIELDS[field];
+    // Soft + companion fields are captured passively, never asked.
+    if (spec && (spec.elicitation === 'soft' || spec.elicitation === 'companion')) {
+      return false;
+    }
+    return true;
+  }) ?? null;
+}
+
+/**
+ * The survey is "effectively complete" when there is no remaining field Ava
+ * would actually ASK. Soft/companion fields (age, gender, education, city,
+ * country, profession_text) never block completion — they are captured
+ * passively if the user happens to volunteer them. Without this, a session
+ * could never reach `complete` because those fields stay open forever.
+ */
+export function isAvaSurveyEffectivelyComplete(openFieldKeys: string[]): boolean {
+  return chooseNextRequiredField(openFieldKeys) === null;
 }
 
 export function promptForRequiredField(field: string | null): string | null {
@@ -84,4 +111,45 @@ export function recoveryReplyForPlan(plan: AvaTurnPlan): string | null {
   const prompt = promptForRequiredField(plan.next_best_question_focus);
   if (!prompt) return 'That gives me enough context there. What feels most important to you about staying connected to Tobago now?';
   return `That gives me enough context there. ${prompt}`;
+}
+
+export type StreamElicitationHeaders = {
+  elicitRoots: '0' | '1';
+  elicitVisit: '0' | '1';
+  elicitConnection: '0' | '1';
+  elicitInvest: '0' | '1';
+};
+
+/** Maps a required-field key to its client picker header, if it has one. */
+const FIELD_TO_PICKER: Record<string, keyof StreamElicitationHeaders | undefined> = {
+  generation: 'elicitRoots',
+  visit_frequency: 'elicitVisit',
+  connection_score: 'elicitConnection',
+  invest_intent: 'elicitInvest',
+};
+
+/**
+ * Show a picker ONLY when it matches the exact field Ava is being told to ask
+ * next ({@link chooseNextRequiredField}). This keeps the picker in lockstep
+ * with Ava's spoken question: if the next field is location/work/etc. (no
+ * picker), we emit all zeros and the turn stays chat-only.
+ *
+ * Previously this scanned ahead to the first MC field and could surface a
+ * connection/invest picker while Ava was still asking for name or location,
+ * so the options never matched the question.
+ */
+export function computeStreamElicitationHeaders(
+  openFieldKeys: string[],
+): StreamElicitationHeaders {
+  const zero: StreamElicitationHeaders = {
+    elicitRoots: '0',
+    elicitVisit: '0',
+    elicitConnection: '0',
+    elicitInvest: '0',
+  };
+  const next = chooseNextRequiredField(openFieldKeys);
+  if (!next) return zero;
+  const header = FIELD_TO_PICKER[next];
+  if (!header) return zero;
+  return { ...zero, [header]: '1' };
 }

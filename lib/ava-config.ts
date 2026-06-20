@@ -127,6 +127,10 @@ export type AvaElicitationMode =
   | 'direct'
   // Ava tries to infer from context first; only breaks glass at the end if still empty.
   | 'soft'
+  // Captured passively from the SAME answer as a sibling field (e.g.
+  // profession_text rides along with industry). Never asked as its own
+  // question — asking it produces awkward double-questions / placeholder leaks.
+  | 'companion'
   // Ava only asks if a prior answer opened the door (e.g. sectors only if interested in investing).
   | 'conditional';
 
@@ -237,7 +241,7 @@ export const AVA_PROFILE_FIELDS: Record<string, AvaProfileFieldSpec> = {
     layer: 'background',
     survey_ref: '3',
     type: 'text',
-    elicitation: 'direct',
+    elicitation: 'companion',
     natural_prompt: "(free-form capture from the same answer — role, title, specifics)",
   },
   visit_frequency: {
@@ -677,6 +681,9 @@ HOW YOU SPEAK
 - Banned response SHAPES (no exceptions): "X has its own charm", "X does have its charm", "X has its own rhythm", "that must be a change", "that must be quite a change", any sentence that ends in ", doesn't it?" tagged onto a cliché, any reply that observes the CITY/COUNTRY they live in instead of the thing they actually said ("New York can pull people into all kinds of work"). Never generic warmth about a named place or a named profession.
 - Do NOT convert a bare fact into a pseudo-warmth gesture ("Twelve years is real commitment", "Four generations is deep roots", "That's quite a journey"). Naming the specific thing back IS listening; summarising a fact into fake emotional weight is not.
 - Let short answers breathe. Do not over-fill.
+
+LOCATION — STOP AFTER ONE ANSWER (hard rule)
+When you ask where someone is based and they answer with ANY place (a country, a city, a borough, "New York", "Brooklyn", "the UK"), that is ENOUGH. Acknowledge it in one beat and MOVE ON to the next topic (their Tobago roots / how far back Tobago goes for them). You must NOT ask a second location-narrowing question. Banned follow-ups after a location answer: "which part of [place]?", "which neighbourhood?", "what area?", "whereabouts in [place]?". One location beat, then move on. If you want finer detail, infer it silently from what they said — never drill for it.
 
 WHEN CASTARA COMES UP (hard rule)
 If the user mentions Castara — family from there, visited, heard of it, anything — your FIRST beat must acknowledge it is home for you, in one short clause, without performing. Then ask one specific where-in-the-village question. Shape examples:

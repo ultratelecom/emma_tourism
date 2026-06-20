@@ -663,6 +663,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* Typewriter caret — blinks while the bubble is still revealing. */
+@keyframes faction-bar-flow {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
 @keyframes caret-blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

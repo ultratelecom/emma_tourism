@@ -27,6 +27,8 @@
 
 import { generateText } from 'ai';
 import { runSimpleExtraction } from './ava-extract-simple';
+import { syncApplyPickerProfileIfExact } from './ava-picker-sync';
+import { chooseNextRequiredField, isAvaSurveyEffectivelyComplete } from './ava-graph/field-flow';
 import {
   AVA_CHAPTERS,
   AVA_CONVERSATION_ROUTES,
@@ -334,7 +336,7 @@ function fallbackNextQuestion(
   };
   const RECOVERY_ORDER = [
     'current_location_text', 'generation', 'visit_frequency', 'industry',
-    'profession_text', 'connection_score', 'contribution_modes', 'invest_intent',
+    'connection_score', 'contribution_modes', 'invest_intent',
     'barriers', 'feature_priorities', 'trust_text', 'future_roles', 'opportunity_text',
   ];
   const nextField = RECOVERY_ORDER.find((f) => openFieldKeys.includes(f));
@@ -857,7 +859,9 @@ async function pickCurrentChapter(userId: string): Promise<{
   );
   const directOpenKeys = allOpenKeys.filter((key) => {
     const spec = AVA_PROFILE_FIELDS[key];
-    return spec && spec.elicitation !== 'soft';
+    // Soft + companion fields are never asked directly, so they don't keep a
+    // chapter "open" for elicitation purposes.
+    return spec && spec.elicitation !== 'soft' && spec.elicitation !== 'companion';
   });
   const directOpen = new Set(directOpenKeys);
 
@@ -1186,7 +1190,7 @@ const VALID_GIF_CUES = new Set([
   'hey_there', 'farewell', 'welcome', 'welcome_back',
 ]);
 
-/** Derive chapter ID from first open field (used for UI display only). */
+/** Derive chapter ID from the next field Ava will actually ask (UI display). */
 function chapterFromOpenFields(openFieldKeys: string[]): string {
   const MAP: Record<string, string> = {
     current_location_text: 'introductions', current_city_region: 'introductions',
@@ -1198,10 +1202,15 @@ function chapterFromOpenFields(openFieldKeys: string[]): string {
     feature_priorities: 'platform_vision', trust_text: 'platform_vision',
     future_roles: 'platform_vision', opportunity_text: 'platform_vision',
   };
+  // Track the chapter of the field Ava is actually about to ask, not the first
+  // unfilled soft/companion field (which she never asks and would otherwise
+  // pin the chapter to an earlier stage forever).
+  const nextAskable = chooseNextRequiredField(openFieldKeys);
+  if (nextAskable && MAP[nextAskable]) return MAP[nextAskable];
   for (const key of openFieldKeys) {
     if (MAP[key]) return MAP[key];
   }
-  return openFieldKeys.length === 0 ? 'wrap_up' : 'introductions';
+  return isAvaSurveyEffectivelyComplete(openFieldKeys) ? 'wrap_up' : 'introductions';
 }
 
 interface AvaRawOutput {
@@ -1301,6 +1310,15 @@ function buildUnifiedUserPrompt(params: {
     .map((h, i) => `  ${i + 1}. ${h.key} — ${h.hint}`)
     .join('\n');
 
+  // The picker (X-Elicit-* headers) is keyed off the SAME next field, so we
+  // steer Ava to ask exactly this one. Otherwise her spoken question and the
+  // multiple-choice options drift apart.
+  const nextField = chooseNextRequiredField(params.openFieldKeys);
+  const nextHint = AVA_UNIFIED_PROFILE_FIELD_HINTS.find((h) => h.key === nextField);
+  const focusLine = nextField
+    ? `\nASK ABOUT THIS ONE THING NEXT (in your own voice, never list options): ${nextField}${nextHint ? ` — ${nextHint.hint}` : ''}. Do not jump ahead to other fields this turn.`
+    : '';
+
   return `CONVERSATION HISTORY:
 ${historyLines || "  (this is the first reply after Ava's opener)"}
 
@@ -1309,6 +1327,7 @@ ${snapshotLines}
 
 FIELDS STILL TO COLLECT (collect naturally, one at a time, in this priority order):
 ${openHints || '  (all fields collected — wind the conversation down naturally)'}
+${focusLine}
 
 LATEST MESSAGE FROM ${params.userName}:
   "${params.userMessage}"`;
@@ -1375,9 +1394,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     console.error('[ava.runTurn] unified call failed', { err });
     modelProvider = 'system';
     modelId = `${AVA_PROMPT_VERSION}/fallback`;
-    const nextFieldKey = AVA_UNIFIED_PROFILE_FIELD_HINTS.find((h) =>
-      openFieldKeys.includes(h.key),
-    )?.key;
+    const nextFieldKey = chooseNextRequiredField(openFieldKeys) ?? undefined;
     const fallbackQ =
       (nextFieldKey && FIELD_FALLBACK_QUESTIONS[nextFieldKey]) ??
       'Where in the world are you based these days?';
@@ -1450,7 +1467,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       });
 
       const stillOpen = await getOpenFieldKeys(input.userId);
-      if (stillOpen.length === 0) {
+      if (isAvaSurveyEffectivelyComplete(stillOpen)) {
         await setSessionStatus(input.sessionId, 'complete');
       }
 
@@ -1559,6 +1576,12 @@ export async function prepareTurn(input: RunTurnInput): Promise<PreparedTurn> {
     turnIndex: userTurnIndex,
   });
 
+  await syncApplyPickerProfileIfExact({
+    userId: input.userId,
+    userMessage: input.userMessage,
+    sourceMessageId: userMsgRow.id,
+  });
+
   const [history, snapshot, openFieldKeys] = await Promise.all([
     safeRead('getFullSessionHistory', getFullSessionHistory(input.sessionId), [] as AvaMessage[]),
     safeRead('getProfileSnapshot', getProfileSnapshot(input.userId), {} as Record<string, string | string[] | number | null>),
@@ -1639,7 +1662,7 @@ export async function persistAvaReply(params: {
   );
 
   const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
-  if (stillOpen !== null && stillOpen.length === 0) {
+  if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
     await setSessionStatus(params.sessionId, 'complete').catch(console.error);
   }
 }

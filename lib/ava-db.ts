@@ -210,6 +210,59 @@ export async function upsertProfileField(params: {
 
   const { value_text, value_json } = splitValueForSpec(spec, params.value);
 
+  // For enum_multi fields, MERGE new values with existing array instead of overwriting.
+  // This fixes AC-12, AC-14, AC-17 from the swarm assessment.
+  if (spec.type === 'enum_multi' && value_json && Array.isArray(value_json)) {
+    const rows = await sql`
+      INSERT INTO ava_profile_fields (
+        user_id, field_key, value_text, value_json, confidence, evidence,
+        status, source_message_id, extracted_by
+      ) VALUES (
+        ${params.userId},
+        ${params.fieldKey},
+        ${value_text},
+        ${JSON.stringify(value_json)}::jsonb,
+        ${params.confidence},
+        ${params.evidence},
+        'filled',
+        ${params.sourceMessageId ?? null},
+        ${params.extractedBy ?? null}
+      )
+      ON CONFLICT (user_id, field_key) DO UPDATE SET
+        value_json = (
+          SELECT jsonb_agg(DISTINCT value ORDER BY value)
+          FROM (
+            SELECT jsonb_array_elements_text(
+              COALESCE(ava_profile_fields.value_json, '[]'::jsonb)
+            ) AS value
+            UNION ALL
+            SELECT jsonb_array_elements_text(EXCLUDED.value_json) AS value
+          ) merged
+          WHERE value IS NOT NULL AND value <> ''
+        ),
+        value_text = (
+          SELECT string_agg(DISTINCT value, ', ' ORDER BY value)
+          FROM (
+            SELECT jsonb_array_elements_text(
+              COALESCE(ava_profile_fields.value_json, '[]'::jsonb)
+            ) AS value
+            UNION ALL
+            SELECT jsonb_array_elements_text(EXCLUDED.value_json) AS value
+          ) merged
+          WHERE value IS NOT NULL AND value <> ''
+        ),
+        confidence = GREATEST(ava_profile_fields.confidence, EXCLUDED.confidence),
+        evidence = ava_profile_fields.evidence || ' | ' || EXCLUDED.evidence,
+        status = 'filled',
+        source_message_id = EXCLUDED.source_message_id,
+        extracted_by = EXCLUDED.extracted_by,
+        updated_at = NOW()
+      RETURNING *
+    `;
+    return rows[0] as AvaProfileField;
+  }
+
+  // For all other field types (text, enum, yes_no_maybe, scale_1_5), overwrite as before.
   const rows = await sql`
     INSERT INTO ava_profile_fields (
       user_id, field_key, value_text, value_json, confidence, evidence,
@@ -639,11 +692,23 @@ export async function getRecentMessages(
 /**
  * Return every message in a session, turn_index ascending. Use this for
  * the chat lane so the model has the full conversation to reason over,
- * not just a trailing window.
+ * not just a trailing window. Optional limit for performance (e.g., resume
+ * only needs recent 50 messages).
  */
 export async function getFullSessionHistory(
   sessionId: string,
+  limit?: number,
 ): Promise<AvaMessage[]> {
+  if (limit && limit > 0) {
+    // When limit is set, return the MOST RECENT N messages (DESC then reverse).
+    const rows = await sql`
+      SELECT * FROM ava_messages
+      WHERE session_id = ${sessionId}
+      ORDER BY turn_index DESC
+      LIMIT ${limit}
+    `;
+    return (rows as AvaMessage[]).reverse();
+  }
   const rows = await sql`
     SELECT * FROM ava_messages
     WHERE session_id = ${sessionId}

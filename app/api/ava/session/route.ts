@@ -82,9 +82,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'session_not_found' }, { status: 404 });
     }
 
+    // Security fix: Check session abandonment (30 days). If abandoned, return 410 Gone
+    // so client falls back to fresh session instead of resuming stale state.
+    const lastActivity = session.last_turn_at
+      ? new Date(session.last_turn_at)
+      : new Date(session.started_at);
+    const daysSinceActivity =
+      (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceActivity > 30) {
+      return NextResponse.json(
+        { error: 'session_abandoned', days_since_activity: Math.floor(daysSinceActivity) },
+        { status: 410 },
+      );
+    }
+
+    // Load session data. Limit messages to recent 50 for performance (client only needs
+    // recent context, not full 100+ message history).
     const [user, messages] = await Promise.all([
       getAvaUserById(session.user_id),
-      getSessionMessages(session.id),
+      getSessionMessages(session.id, { limit: 50 }),
     ]);
 
     return NextResponse.json({

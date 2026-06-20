@@ -3,9 +3,8 @@
  *
  * Two lanes, chosen by where the intelligence actually pays off.
  *
- *  1. Chat lane (VISIBLE reply) — OpenAI's current flagship.
- *     Primary: OpenAI `gpt-5.4` (the GPT-5 family's current API-available
- *     flagship; GPT-5.5 is announced but API is not yet live as of Apr 2026).
+ *  1. Chat lane (VISIBLE reply) — OpenAI's mini flagship.
+ *     Primary: OpenAI `gpt-5.4-mini` (fast GPT-5 family model).
  *     This is what the user sees. We want reasoning and emotional nuance
  *     here, not the cheapest token — the visible voice is the product.
  *     Env override: OPENAI_CHAT_MODEL.
@@ -21,7 +20,7 @@
  *   STEPFUN_MODEL        (optional, default "step-3.5-flash")
  *   STEPFUN_BASE_URL     (optional, default "https://api.stepfun.ai/step_plan/v1")
  *   OPENAI_API_KEY       (required for chat + extraction fallback)
- *   OPENAI_CHAT_MODEL    (optional, default "gpt-5.4")
+ *   OPENAI_CHAT_MODEL    (optional, default "gpt-5.4-mini")
  *   AVA_USE_STEPFUN_FOR_CHAT ("1" to route chat to StepFun too — slow & expensive,
  *                             only flip this if you want the reasoning-model voice)
  */
@@ -31,7 +30,7 @@ import type { LanguageModel } from 'ai';
 
 const STEPFUN_DEFAULT_BASE_URL = 'https://api.stepfun.ai/step_plan/v1';
 const STEPFUN_DEFAULT_MODEL = 'step-3.5-flash';
-const CHAT_DEFAULT_MODEL = 'gpt-5.4';
+const CHAT_DEFAULT_MODEL = 'gpt-5.4-mini';
 
 function stepfunProvider() {
   const apiKey = process.env.STEPFUN_API_KEY;
@@ -76,7 +75,7 @@ export function getAvaChatModel(): { model: LanguageModel; info: AvaModelInfo } 
 
 /**
  * Extraction lane — hidden structured-output pass. StepFun reasoning
- * model by default. Falls back to gpt-4o-mini if StepFun unavailable.
+ * model by default. Falls back to gpt-5.4-mini if StepFun unavailable.
  */
 export function getAvaExtractionModel(): { model: LanguageModel; info: AvaModelInfo } {
   const stepfun = stepfunProvider();

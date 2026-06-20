@@ -11,9 +11,14 @@
  * nothing blocks the user-visible response.
  *
  * Headers returned:
- *   X-Gif-Cue      — one of the known GIF cue strings, or empty
- *   X-Turn-Index   — integer: Ava's turn_index for this reply
- *   X-Chapter-Id   — current chapter slug (for debug / analytics)
+ *   X-Gif-Cue       — one of the known GIF cue strings, or empty
+ *   X-Turn-Index    — integer: Ava's turn_index for this reply
+ *   X-Chapter-Id    — current chapter slug (for debug / analytics)
+ *   X-Elicit-Roots      — Tobago-generation picker
+ *   X-Elicit-Visit      — visit-frequency picker
+ *   X-Elicit-Connection — 1–5 connection picker
+ *   X-Elicit-Invest     — invest yes/maybe/no picker
+ *   (At most one is "1"; order: Roots → Visit → Connection → Invest.)
  *
  * Request body:
  *   { session_id: string, user_id: string, message: string }
@@ -22,11 +27,16 @@
 import { after } from 'next/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { createTextStreamResponse, streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
 import { getAvaSessionById, getAvaUserById } from '@/lib/ava-db';
 import { getAvaChatModel } from '@/lib/ava-model';
 import { prepareTurn, persistAvaReply } from '@/lib/ava-session';
+import { prepareAvaV2Turn, persistAvaV2Reply } from '@/lib/ava-v2-turn';
 
 export const maxDuration = 60;
+
+/** Free-voice rewrite. Default ON; set AVA_V2=0 to fall back to the v1 engine. */
+const USE_AVA_V2 = process.env.AVA_V2 !== '0';
 
 export async function POST(request: NextRequest) {
   // ── 1. Parse & validate request ──────────────────────────────────────
@@ -61,6 +71,68 @@ export async function POST(request: NextRequest) {
   }
   if (session.status !== 'active') {
     return NextResponse.json({ error: `session_status_${session.status}` }, { status: 409 });
+  }
+
+  // ── Ava v2 (free-voice) path ─────────────────────────────────────────
+  if (USE_AVA_V2) {
+    let preparedV2;
+    try {
+      preparedV2 = await prepareAvaV2Turn({
+        sessionId: session_id,
+        userId: user_id,
+        userMessage: message,
+      });
+    } catch (err) {
+      console.error('[ava/turn:v2] prepare failed:', err);
+      return NextResponse.json({ error: 'turn_setup_failed' }, { status: 500 });
+    }
+
+    // Visible voice: use the project's configured chat model (StepFun reasoning
+    // model when AVA_USE_STEPFUN_FOR_CHAT / STEPFUN is in play, else OpenAI).
+    // AVA_V2_CHAT_MODEL can force a specific OpenAI model for v2 if desired.
+    // Reasoning models reject `temperature`, so only set it for plain models.
+    const forcedV2 = process.env.AVA_V2_CHAT_MODEL;
+    const { model: v2Model, info: v2Info } = forcedV2
+      ? { model: openai(forcedV2), info: { provider: 'openai' as const, modelId: forcedV2, isFallback: false } }
+      : getAvaChatModel();
+    const supportsTemperature =
+      v2Info.provider !== 'stepfun' && !/^(o\d|gpt-5)/.test(v2Info.modelId);
+    const v2StartedAt = Date.now();
+    const v2Result = streamText({
+      model: v2Model,
+      system: preparedV2.systemPrompt,
+      prompt: preparedV2.userPrompt,
+      ...(supportsTemperature ? { temperature: 0.7 } : {}),
+    });
+
+    after(async () => {
+      try {
+        const fullText = await v2Result.text;
+        await persistAvaV2Reply({
+          sessionId: session_id,
+          userId: user_id,
+          userMessage: message,
+          rawText: fullText,
+          avaTurnIndex: preparedV2.avaTurnIndex,
+          startedAt: v2StartedAt,
+          userMsgId: preparedV2.userMsgId,
+          openFieldKeys: preparedV2.openFieldKeys,
+          lastAvaMessage: preparedV2.lastAvaMessage,
+        });
+      } catch (err) {
+        console.error('[ava/turn:v2] after() persist failed:', err);
+      }
+    });
+
+    return createTextStreamResponse({
+      textStream: v2Result.textStream,
+      headers: {
+        'X-Gif-Cue': '',
+        'X-Turn-Index': String(preparedV2.avaTurnIndex),
+        'X-Chapter-Id': '',
+        'X-Ava-Engine': 'v2',
+      },
+    });
   }
 
   // ── 3. Pre-flight: persist user message + load all context ───────────

@@ -10,7 +10,7 @@ import { TobagoPlace, getRecommendations, getPriceSymbol, getCategoryIcon } from
 
 type AIResponseType = 'name_reaction' | 'email_thanks' | 'arrival_reaction' | 'rating_reaction' | 'activity_tip' | 'farewell' | 'welcome_back' | 'welcome_intro' | 'ask_email' | 'ask_arrival' | 'ask_rating' | 'ask_activities' | 'menu_response';
 type GifType = 'welcome' | 'hey_there' | 'name_reaction' | 'thanks' | 'excited' | 'travel' | 'plane' | 'cruise' | 'ferry' | 'beach' | 'adventure' | 'food' | 'nightlife' | 'photos' | 'five_stars' | 'good_rating' | 'okay_rating' | 'farewell' | 'enjoy' | 'welcome_back' | 'diving' | 'nature' | 'empathy' | 'celebration' | 'local_vibes';
-type SurveyStep = 'splash' | 'loading' | 'confirm_identity' | 'welcome' | 'welcome_back' | 'main_menu' | 'name' | 'email' | 'arrival' | 'rating' | 'activities' | 'complete' | 'rating_flow' | 'free_chat';
+type SurveyStep = 'splash' | 'loading' | 'confirm_identity' | 'welcome_back' | 'chat' | 'complete';
 
 interface AIContext {
   name?: string;
@@ -119,6 +119,12 @@ function isValidEmail(email: string): boolean {
   return emailRegex.test(email);
 }
 
+let __emmaMsgSeq = 0;
+function nextMsgId(prefix: string): string {
+  __emmaMsgSeq += 1;
+  return `${prefix}-${Date.now()}-${__emmaMsgSeq}`;
+}
+
 /**
  * Split AI response into at most 2 message chunks so it feels natural (not a flood of bubbles).
  * Uses double newline for paragraph break; if more than 2 parts, combines into 2.
@@ -169,6 +175,23 @@ function getRelativeTime(date: Date): string {
 // ============================================
 // API FUNCTIONS
 // ============================================
+
+type EmmaPicker = 'arrival' | 'rating' | 'activity';
+
+interface EmmaTurnMeta {
+  gif_cue: GifType | null;
+  picker: EmmaPicker | null;
+}
+
+function parseEmmaTurnMeta(headers: Headers | null | undefined): EmmaTurnMeta {
+  if (!headers) return { gif_cue: null, picker: null };
+  const cue = (headers.get('x-gif-cue') || '').trim();
+  let picker: EmmaPicker | null = null;
+  if (headers.get('x-elicit-arrival') === '1') picker = 'arrival';
+  else if (headers.get('x-elicit-rating') === '1') picker = 'rating';
+  else if (headers.get('x-elicit-activity') === '1') picker = 'activity';
+  return { gif_cue: (cue || null) as GifType | null, picker };
+}
 
 async function getReactionGif(type: GifType): Promise<GifData | null> {
   try {
@@ -1370,152 +1393,166 @@ function EmailInput({
 // ============================================
 
 export default function EmmaChat() {
-  // State
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [currentStep, setCurrentStep] = useState<SurveyStep>('splash');
   const [isTyping, setIsTyping] = useState(false);
   const [userName, setUserName] = useState('');
-  const [userEmail, setUserEmail] = useState('');
-  const [userRating, setUserRating] = useState(0);
-  const [userArrival, setUserArrival] = useState('');
   const [emailError, setEmailError] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
-  
-  // User identity state
+  const [elicitationPicker, setElicitationPicker] = useState<EmmaPicker | null>(null);
+  const [sending, setSending] = useState(false);
+
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [sessionToken, setSessionToken] = useState<string>('');
   const [browserFingerprint, setBrowserFingerprint] = useState<string>('');
-  const [userContext, setUserContext] = useState<string>('');
-  
-  // Refs
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const userIdRef = useRef<string | null>(null);
 
-  // Callbacks
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
   const markAsRead = useCallback((messageId: string) => {
     setTimeout(() => {
-      setMessages(prev => prev.map(m => 
-        m.id === messageId ? { ...m, delivered: true } : m
-      ));
+      setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, delivered: true } : m)));
     }, 300);
     setTimeout(() => {
-      setMessages(prev => prev.map(m => 
-        m.id === messageId ? { ...m, read: true } : m
-      ));
+      setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, read: true } : m)));
     }, 800);
   }, []);
 
   const addReactionToMessage = useCallback((messageId: string, reaction: 'heart' | 'like' | 'fire' | 'clap') => {
-    setMessages(prev => prev.map(msg => 
-      msg.id === messageId ? { ...msg, reaction } : msg
-    ));
+    setMessages(prev => prev.map(msg => (msg.id === messageId ? { ...msg, reaction } : msg)));
   }, []);
 
+  // Append Emma text/gif messages with a natural typing cadence (used for
+  // greetings and the returning-user welcome, not for streamed turns).
   const addEmmaMessages = useCallback(async (
-    contents: string[], 
-    nextStep?: SurveyStep,
+    contents: string[],
     gifType?: GifType,
     gifFirst?: boolean,
-    options?: { delayBetweenMs?: number }
   ) => {
     setIsTyping(true);
-    const delayMs = options?.delayBetweenMs ?? 700 + Math.random() * 300;
+    const valid = contents.filter(c => c && c.trim().length >= 1);
 
-    const validContents = contents.filter(c => c && c.trim().length > 2);
-    
     if (gifFirst && gifType) {
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await new Promise(r => setTimeout(r, 500));
       const gif = await getReactionGif(gifType);
-      if (gif && gif.url) {
-        const gifMessage: Message = {
-          id: `gif-${Date.now()}`,
-          type: 'gif',
-          content: gif.title || '',
-          gifUrl: gif.url,
-          timestamp: new Date(),
-          animate: true,
-        };
-        setMessages(prev => [...prev, gifMessage]);
-        
-        // Save to DB
-        if (sessionToken) {
-          saveMessageToDb(sessionToken, 'emma', `[GIF: ${gifType}]`, { message_type: 'gif' });
-        }
-        
+      if (gif?.url) {
+        setMessages(prev => [...prev, {
+          id: nextMsgId('gif'), type: 'gif', content: gif.title || '', gifUrl: gif.url,
+          timestamp: new Date(), animate: true,
+        }]);
+        if (sessionToken) saveMessageToDb(sessionToken, 'emma', `[GIF: ${gifType}]`, { message_type: 'gif' });
         setIsTyping(true);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(r => setTimeout(r, 450));
       }
     }
-    
-    if (validContents.length === 0) {
-      setIsTyping(false);
-      if (nextStep) setCurrentStep(nextStep);
-      return;
-    }
-    
-    for (let i = 0; i < validContents.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-      
-      const newMessage: Message = {
-        id: `emma-${Date.now()}-${i}`,
-        type: 'emma',
-        content: validContents[i],
-        timestamp: new Date(),
-        animate: true,
-      };
-      setMessages(prev => [...prev, newMessage]);
-      
-      // Save to DB
-      if (sessionToken) {
-        saveMessageToDb(sessionToken, 'emma', validContents[i]);
-      }
-      
-      if (!gifFirst && gifType && i === 0 && validContents.length >= 2) {
+
+    for (let i = 0; i < valid.length; i++) {
+      await new Promise(r => setTimeout(r, 650 + Math.random() * 250));
+      setMessages(prev => [...prev, {
+        id: nextMsgId('emma'), type: 'emma', content: valid[i], timestamp: new Date(), animate: true,
+      }]);
+      if (sessionToken) saveMessageToDb(sessionToken, 'emma', valid[i]);
+      if (i < valid.length - 1) {
         setIsTyping(true);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const gif = await getReactionGif(gifType);
-        if (gif && gif.url) {
-          setMessages(prev => [...prev, {
-            id: `gif-${Date.now()}`,
-            type: 'gif',
-            content: gif.title || '',
-            gifUrl: gif.url,
-            timestamp: new Date(),
-            animate: true,
-          }]);
-          await new Promise(resolve => setTimeout(resolve, 400));
-        }
-      }
-      
-      if (i < validContents.length - 1) {
-        setIsTyping(true);
-        await new Promise(resolve => setTimeout(resolve, Math.min(400, delayMs * 0.6)));
+        await new Promise(r => setTimeout(r, 350));
       }
     }
-    
     setIsTyping(false);
-    
-    if (nextStep) {
-      setCurrentStep(nextStep);
-    }
-    
     setTimeout(() => inputRef.current?.focus(), 100);
   }, [sessionToken]);
 
-  // Initialize on mount
+  // =========================================================
+  // Unified streaming turn — every user message goes here.
+  // =========================================================
+  const runEmmaTurn = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setSending(true);
+    setElicitationPicker(null);
+    setIsTyping(true);
+    try {
+      const res = await fetch('/api/emma/turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_token: sessionToken,
+          user_id: userIdRef.current || undefined,
+          message: trimmed,
+        }),
+      });
+
+      if (!res.ok || !res.body) throw new Error(`turn failed (${res.status})`);
+
+      const meta = parseEmmaTurnMeta(res.headers);
+
+      // Brief typing beat before the first token lands.
+      await new Promise(r => setTimeout(r, 180));
+      setIsTyping(false);
+
+      const streamId = nextMsgId('emma-stream');
+      setMessages(prev => [...prev, {
+        id: streamId, type: 'emma', content: '', timestamp: new Date(), animate: true,
+      }]);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = '';
+      let rafPending = false;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        if (!rafPending) {
+          rafPending = true;
+          requestAnimationFrame(() => {
+            const snap = acc;
+            setMessages(prev => prev.map(m => (m.id === streamId ? { ...m, content: snap } : m)));
+            rafPending = false;
+          });
+        }
+      }
+      acc += decoder.decode();
+      const finalText = acc.trim() || '...';
+      setMessages(prev => prev.map(m => (m.id === streamId ? { ...m, content: finalText } : m)));
+
+      if (meta.gif_cue) {
+        const gif = await getReactionGif(meta.gif_cue);
+        if (gif?.url) {
+          setMessages(prev => [...prev, {
+            id: nextMsgId('gif'), type: 'gif', content: gif.title || '', gifUrl: gif.url,
+            timestamp: new Date(), animate: true,
+          }]);
+        }
+      }
+
+      setElicitationPicker(meta.picker);
+    } catch (err) {
+      console.error('Emma turn error:', err);
+      setIsTyping(false);
+      setMessages(prev => [...prev, {
+        id: nextMsgId('emma'), type: 'emma',
+        content: "Hmm, my signal dropped for a second. Say that again?",
+        timestamp: new Date(), animate: true,
+      }]);
+    } finally {
+      setIsTyping(false);
+      setSending(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [sessionToken]);
+
+  // Initialize session token + fingerprint on mount.
   useEffect(() => {
     const init = async () => {
-      // Get or create session token
       const token = getSessionToken();
       setSessionToken(token);
-      
-      // Generate fingerprint
       let fp = getStoredFingerprint();
       if (!fp) {
         fp = await generateBrowserFingerprint();
@@ -1523,88 +1560,75 @@ export default function EmmaChat() {
       }
       setBrowserFingerprint(fp);
     };
-    
     init();
   }, []);
 
-  // Check for returning user after splash
+  const startNewVisitor = useCallback(async () => {
+    setCurrentUser(null);
+    userIdRef.current = null;
+    setIsReturningUser(false);
+    setUserName('');
+    await createConversation(sessionToken);
+    setCurrentStep('chat');
+    await new Promise(r => setTimeout(r, 300));
+    let intro: string;
+    try {
+      intro = await getEmmaAIResponseWithTimeout('welcome_intro', {});
+    } catch {
+      intro = `${EMMA_MESSAGES.welcome[0]} ${EMMA_MESSAGES.intro}`;
+    }
+    await addEmmaMessages(splitResponseIntoMessages(intro), 'hey_there', true);
+  }, [sessionToken, addEmmaMessages]);
+
+  // After splash: recognise device, else greet a new visitor.
   const checkReturningUser = useCallback(async () => {
     if (!browserFingerprint) return;
-    
     setCurrentStep('loading');
-    
     try {
       const result = await identifyUser(browserFingerprint);
-      
       if (result.user && result.isReturningUser) {
         setCurrentUser(result.user);
+        userIdRef.current = result.user.id;
         setIsReturningUser(true);
         setUserName(result.user.name);
-        setUserEmail(result.user.email);
         storeUserId(result.user.id);
-        if (result.context) setUserContext(result.context);
-
-        // Precursor: ask "Is that you [Name]?" before assuming identity
         setCurrentStep('confirm_identity');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const confirmMsg = `Is that you, ${result.user.name}?`;
-        await addEmmaMessages([confirmMsg], undefined);
-        // Stay on confirm_identity; user taps Yes or No below
+        await new Promise(r => setTimeout(r, 500));
+        await addEmmaMessages([`Is that you, ${result.user.name}?`]);
       } else {
-        // New user flow
-        await createConversation(sessionToken);
-        setCurrentStep('welcome');
-
-        await new Promise(resolve => setTimeout(resolve, 300));
-        let intro: string;
-        try {
-          intro = await getEmmaAIResponseWithTimeout('welcome_intro', {});
-        } catch {
-          intro = EMMA_MESSAGES.welcome[0] + '\n\n' + EMMA_MESSAGES.intro;
-        }
-        const introChunks = splitResponseIntoMessages(intro);
-        await addEmmaMessages(introChunks, 'name', 'hey_there', true);
+        await startNewVisitor();
       }
     } catch (error) {
       console.error('User check failed:', error);
-      // Fall back to new user flow
-      await createConversation(sessionToken);
-      setCurrentStep('welcome');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      await addEmmaMessages([EMMA_MESSAGES.welcome[0], EMMA_MESSAGES.intro], 'name', 'hey_there', true);
+      await startNewVisitor();
     }
-  }, [browserFingerprint, sessionToken, addEmmaMessages]);
+  }, [browserFingerprint, addEmmaMessages, startNewVisitor]);
 
-  // "Is that you?" precursor – Yes → welcome back, No → new user flow
   const handleConfirmIdentity = useCallback(async (isYes: boolean) => {
-    const reply = isYes ? "Yes, it's me" : "No, someone else";
+    const reply = isYes ? "Yes, it's me" : 'No, someone else';
     setMessages(prev => [...prev, {
-      id: `user-${Date.now()}`,
-      type: 'user',
-      content: reply,
-      timestamp: new Date(),
-      animate: true,
-      delivered: true,
-      read: true,
+      id: nextMsgId('user'), type: 'user', content: reply,
+      timestamp: new Date(), animate: true, delivered: true, read: true,
     }]);
     if (sessionToken) saveMessageToDb(sessionToken, 'user', reply);
 
     if (isYes && currentUser) {
+      userIdRef.current = currentUser.id;
       await createConversation(sessionToken, currentUser.id);
+      setCurrentStep('chat');
       let welcomeMsg: string;
       try {
         welcomeMsg = await getEmmaAIResponseWithTimeout('welcome_back', {
           name: currentUser.name,
           visitCount: currentUser.visit_count,
-          userContextSummary: userContext || undefined,
         });
       } catch {
         welcomeMsg = EMMA_MESSAGES.welcomeBack(currentUser.name, currentUser.visit_count, currentUser.last_seen_at);
       }
-      const followUp = EMMA_MESSAGES.welcomeBackFollowUp(currentUser.last_seen_at);
-      await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
+      await addEmmaMessages([welcomeMsg], 'welcome_back', true);
+      // Resume the survey where it left off by sending an empty contextual ping.
+      await runEmmaTurn('(returning visitor reconnected)');
     } else {
-      // Unlink this device from the previous user so Emma treats this session as a new person
       if (browserFingerprint) {
         try {
           await fetch('/api/emma/user/forget-device', {
@@ -1616,494 +1640,64 @@ export default function EmmaChat() {
           console.error('Forget device failed:', e);
         }
       }
-      setCurrentUser(null);
-      setIsReturningUser(false);
-      setUserName('');
-      setUserEmail('');
       clearStoredUserId();
-      await createConversation(sessionToken);
-      setCurrentStep('welcome');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      let intro: string;
-      try {
-        intro = await getEmmaAIResponseWithTimeout('welcome_intro', {});
-      } catch {
-        intro = EMMA_MESSAGES.welcome[0] + '\n\n' + EMMA_MESSAGES.intro;
-      }
-      const introChunks = splitResponseIntoMessages(intro);
-      await addEmmaMessages(introChunks, 'name', 'hey_there', true);
+      await startNewVisitor();
     }
-  }, [sessionToken, currentUser, addEmmaMessages, browserFingerprint]);
+  }, [sessionToken, currentUser, browserFingerprint, addEmmaMessages, runEmmaTurn, startNewVisitor]);
 
-  // Scroll on new messages
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping, scrollToBottom]);
+  }, [messages, isTyping, elicitationPicker, scrollToBottom]);
 
-  // Handle form submission
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!input.trim() || isTyping) return;
-
     const userInput = input.trim();
-
-    if (currentStep === 'email') {
-      if (!isValidEmail(userInput)) {
-        setEmailError(true);
-        setTimeout(() => setEmailError(false), 2000);
-        return;
-      }
-    }
-
+    if (!userInput || sending || isTyping) return;
     setInput('');
     setEmailError(false);
 
-    const userMessageId = `user-${Date.now()}`;
+    const userMessageId = nextMsgId('user');
     setMessages(prev => [...prev, {
-      id: userMessageId,
-      type: 'user',
-      content: userInput,
-      timestamp: new Date(),
-      animate: true,
-      delivered: false,
-      read: false,
+      id: userMessageId, type: 'user', content: userInput,
+      timestamp: new Date(), animate: true, delivered: false, read: false,
     }]);
     markAsRead(userMessageId);
-    
-    // Save to DB
-    if (sessionToken) {
-      saveMessageToDb(sessionToken, 'user', userInput);
-    }
+    if (sessionToken) saveMessageToDb(sessionToken, 'user', userInput);
+    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
 
-    if (currentStep === 'name') {
-      const extractedName = extractName(userInput);
-      setUserName(extractedName);
-
-      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-
-      await new Promise(resolve => setTimeout(resolve, 600));
-      let nameReaction: string;
-      try {
-        nameReaction = await getEmmaAIResponseWithTimeout('name_reaction', { name: extractedName });
-      } catch {
-        nameReaction = EMMA_MESSAGES.nameResponse(extractedName);
-      }
-      let emailAsk: string;
-      try {
-        emailAsk = await getEmmaAIResponseWithTimeout('ask_email', { name: extractedName });
-      } catch {
-        emailAsk = EMMA_MESSAGES.askEmail;
-      }
-      await addEmmaMessages([nameReaction, emailAsk], 'email', 'name_reaction', true);
-      
-    } else if (currentStep === 'email') {
-      setUserEmail(userInput);
-      
-      // Check if this email belongs to existing user
-      try {
-        const result = await identifyUser(browserFingerprint, userInput, userName);
-        
-        if (result.user && result.isReturningUser && !isReturningUser) {
-          // They're a returning user on a new device!
-          setCurrentUser(result.user);
-          setIsReturningUser(true);
-          storeUserId(result.user.id);
-          if (result.context) setUserContext(result.context);
-
-          setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-
-          await new Promise(resolve => setTimeout(resolve, 600));
-          let welcomeMsg: string;
-          try {
-            welcomeMsg = await getEmmaAIResponseWithTimeout('welcome_back', {
-              name: result.user.name,
-              visitCount: result.user.visit_count,
-              userContextSummary: result.context || undefined,
-            });
-          } catch {
-            welcomeMsg = `Wait... ${result.user.name}! I remember you!`;
-          }
-          const followUp = `You came back! This is visit #${result.user.visit_count}!`;
-          await addEmmaMessages([welcomeMsg, followUp], 'main_menu', 'welcome_back', true);
-          
-          return;
-        } else if (result.user) {
-          // New user created
-          setCurrentUser(result.user);
-          storeUserId(result.user.id);
-        }
-      } catch (error) {
-        console.error('Email check failed:', error);
-      }
-      
-      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-
-      await new Promise(resolve => setTimeout(resolve, 600));
-      let emailReaction: string;
-      try {
-        emailReaction = await getEmmaAIResponseWithTimeout('email_thanks', { name: userName });
-      } catch {
-        emailReaction = EMMA_MESSAGES.emailResponse;
-      }
-      let arrivalAsk: string;
-      try {
-        arrivalAsk = await getEmmaAIResponseWithTimeout('ask_arrival', { name: userName });
-      } catch {
-        arrivalAsk = EMMA_MESSAGES.askArrival;
-      }
-      await addEmmaMessages([emailReaction, arrivalAsk], 'arrival', 'thanks', true);
-      
-    } else if (currentStep === 'free_chat' || currentStep === 'rating_flow') {
-      // Free chat mode - use REAL AI
-      setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 600);
-      
-      setIsTyping(true);
-      
-      // Check if this is a recommendation request
-      const lowerInput = userInput.toLowerCase();
-      const isRecommendationRequest = 
-        lowerInput.includes('eat') || 
-        lowerInput.includes('food') || 
-        lowerInput.includes('restaurant') ||
-        lowerInput.includes('beach') ||
-        lowerInput.includes('do') ||
-        lowerInput.includes('activity') ||
-        lowerInput.includes('recommend') ||
-        lowerInput.includes('suggestion') ||
-        lowerInput.includes('where should') ||
-        lowerInput.includes('what should') ||
-        lowerInput.includes('places to');
-      
-      try {
-        // Call the AI chat endpoint for intelligent responses
-        const response = await fetch('/api/emma/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: userInput,
-            user_name: userName,
-            user_id: currentUser?.id,
-            session_token: sessionToken,
-            user_context: userContext || undefined,
-            conversation_history: messages.slice(-10).map(m => ({
-              role: m.type === 'user' ? 'user' : 'assistant',
-              content: m.content,
-            })),
-          }),
-        });
-        
-        if (!response.ok) throw new Error('Chat failed');
-        
-        const data = await response.json();
-        
-        // At most 2 messages, with a natural pause between them (like someone typing then sending again)
-        const chunks = splitResponseIntoMessages(data.response);
-        const typingDelayMs = 650 + Math.random() * 250; // ~650–900ms between the 2 messages
-        await addEmmaMessages(chunks, undefined, data.gif_type, false, { delayBetweenMs: typingDelayMs });
-        
-        // If this was a recommendation request, show place cards
-        if (isRecommendationRequest) {
-          const places = getRecommendations(userInput);
-          if (places.length > 0) {
-            await new Promise(resolve => setTimeout(resolve, 600));
-            setIsTyping(true);
-            await new Promise(resolve => setTimeout(resolve, 400));
-            
-            // Add place cards
-            const placesMessage: Message = {
-              id: `places-${Date.now()}`,
-              type: 'places',
-              content: 'Here are my top picks:',
-              timestamp: new Date(),
-              animate: true,
-              places: places,
-            };
-            setMessages(prev => [...prev, placesMessage]);
-            setIsTyping(false);
-            
-            // Follow up message
-            await new Promise(resolve => setTimeout(resolve, 800));
-            await addEmmaMessages(["Swipe to see more! Tap any card for directions. 👆"], 'free_chat');
-          }
-        }
-        
-        setCurrentStep('free_chat');
-      } catch (error) {
-        console.error('AI chat error:', error);
-        // Fallback to simple response if AI fails
-        await addEmmaMessages(["Hmm, let me think... Could you tell me more about what you're looking for? 🤔"], 'free_chat');
-      }
-    }
+    await runEmmaTurn(userInput);
   };
 
-  // Handle arrival selection
-  const handleArrivalSelect = async (arrivalId: string) => {
-    const option = ARRIVAL_OPTIONS.find(o => o.id === arrivalId);
-    if (!option) return;
-
-    setUserArrival(arrivalId);
-
-    const userMessageId = `user-${Date.now()}`;
+  // Picker selections are sent through the same unified turn as plain text.
+  const handlePickerSelect = useCallback(async (display: string, value: string) => {
+    if (sending || isTyping) return;
+    setElicitationPicker(null);
+    const userMessageId = nextMsgId('user');
     setMessages(prev => [...prev, {
-      id: userMessageId,
-      type: 'user',
-      content: `${option.emoji} ${option.label}`,
-      timestamp: new Date(),
-      animate: true,
-      delivered: false,
-      read: false,
+      id: userMessageId, type: 'user', content: display,
+      timestamp: new Date(), animate: true, delivered: false, read: false,
     }]);
     markAsRead(userMessageId);
-    
-    if (sessionToken) {
-      saveMessageToDb(sessionToken, 'user', `${option.emoji} ${option.label}`, { 
-        message_type: 'selection',
-        selection_value: arrivalId 
-      });
-    }
-    
+    if (sessionToken) saveMessageToDb(sessionToken, 'user', display, { message_type: 'selection', selection_value: value });
     setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
+    await runEmmaTurn(value);
+  }, [sending, isTyping, sessionToken, markAsRead, addReactionToMessage, runEmmaTurn]);
 
-    await new Promise(resolve => setTimeout(resolve, 600));
-    let arrivalReaction: string;
-    try {
-      arrivalReaction = await getEmmaAIResponseWithTimeout('arrival_reaction', { name: userName, arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' });
-    } catch {
-      arrivalReaction = EMMA_MESSAGES.arrivalResponse(arrivalId);
-    }
-    let ratingAsk: string;
-    try {
-      ratingAsk = await getEmmaAIResponseWithTimeout('ask_rating', { name: userName, arrivalMethod: arrivalId as 'plane' | 'cruise' | 'ferry' });
-    } catch {
-      ratingAsk = EMMA_MESSAGES.askRating;
-    }
-    await addEmmaMessages([arrivalReaction, ratingAsk], 'rating', arrivalId as GifType, true);
-  };
+  const isInputDisabled = isTyping || sending || currentStep === 'splash' ||
+    currentStep === 'loading' || currentStep === 'confirm_identity' || !!elicitationPicker;
 
-  // Handle rating selection
-  const handleRatingSelect = async (rating: number) => {
-    setUserRating(rating);
-    
-    const userMessageId = `user-${Date.now()}`;
-    setMessages(prev => [...prev, {
-      id: userMessageId,
-      type: 'user',
-      content: `${'⭐'.repeat(rating)} (${rating}/5)`,
-      timestamp: new Date(),
-      animate: true,
-      delivered: false,
-      read: false,
-    }]);
-    markAsRead(userMessageId);
-    
-    if (sessionToken) {
-      saveMessageToDb(sessionToken, 'user', `${rating}/5 stars`, { 
-        message_type: 'rating',
-        rating_value: rating 
-      });
-    }
-
-    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
-    
-    const gifType: GifType = rating >= 5 ? 'five_stars' : rating >= 4 ? 'good_rating' : 'okay_rating';
-
-    await new Promise(resolve => setTimeout(resolve, 600));
-    let ratingReaction: string;
-    try {
-      ratingReaction = await getEmmaAIResponseWithTimeout('rating_reaction', { name: userName, rating });
-    } catch {
-      ratingReaction = EMMA_MESSAGES.ratingResponse(rating);
-    }
-    let activitiesAsk: string;
-    try {
-      activitiesAsk = await getEmmaAIResponseWithTimeout('ask_activities', { name: userName, rating });
-    } catch {
-      activitiesAsk = EMMA_MESSAGES.askActivities;
-    }
-    await addEmmaMessages([ratingReaction, activitiesAsk], 'activities', gifType, true);
-  };
-
-  // Handle activity selection
-  const handleActivitySelect = async (activityId: string) => {
-    const option = ACTIVITY_OPTIONS.find(o => o.id === activityId);
-    if (!option) return;
-
-    const userMessageId = `user-${Date.now()}`;
-    setMessages(prev => [...prev, {
-      id: userMessageId,
-      type: 'user',
-      content: `${option.emoji} ${option.label}`,
-      timestamp: new Date(),
-      animate: true,
-      delivered: false,
-      read: false,
-    }]);
-    markAsRead(userMessageId);
-    
-    if (sessionToken) {
-      saveMessageToDb(sessionToken, 'user', `${option.emoji} ${option.label}`, { 
-        message_type: 'selection',
-        selection_value: activityId 
-      });
-    }
-    
-    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
-
-    await new Promise(resolve => setTimeout(resolve, 600));
-    let activityReaction: string;
-    try {
-      activityReaction = await getEmmaAIResponseWithTimeout('activity_tip', { name: userName, activity: activityId as AIContext['activity'] });
-    } catch {
-      activityReaction = EMMA_MESSAGES.activityResponse(activityId);
-    }
-    let farewellMsg: string;
-    try {
-      farewellMsg = await getEmmaAIResponseWithTimeout('farewell', { name: userName, activity: activityId as AIContext['activity'], arrivalMethod: userArrival as AIContext['arrivalMethod'] });
-    } catch {
-      farewellMsg = `Have an amazing time, ${userName}!`;
-    }
-    await addEmmaMessages([activityReaction, farewellMsg], 'complete', activityId as GifType, true);
-    
-    setShowConfetti(true);
-    setTimeout(() => setShowConfetti(false), 4000);
-
-    // Save survey to database
-    try {
-      await fetch('/api/emma/survey', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionToken,
-          name: userName,
-          email: userEmail,
-          arrival_method: userArrival,
-          journey_rating: userRating,
-          activity_interest: activityId,
-        }),
-      });
-      console.log('✅ Survey saved!');
-      
-      // Save memory about their preferences
-      if (currentUser) {
-        await saveMemory(currentUser.id, {
-          memory_type: 'preference',
-          category: activityId,
-          raw_text: `Interested in ${option.label}`,
-          sentiment: 'positive',
-          importance: 7,
-        });
-      }
-    } catch (error) {
-      console.error('Failed to save survey:', error);
-    }
-  };
-
-  // Handle main menu selection (returning users)
-  const handleMainMenuSelect = async (menuId: string) => {
-    const option = MAIN_MENU_OPTIONS.find(o => o.id === menuId);
-    if (!option) return;
-
-    const userMessageId = `user-${Date.now()}`;
-    setMessages(prev => [...prev, {
-      id: userMessageId,
-      type: 'user',
-      content: `${option.emoji} ${option.label}`,
-      timestamp: new Date(),
-      animate: true,
-      delivered: false,
-      read: false,
-    }]);
-    markAsRead(userMessageId);
-
-    setTimeout(() => addReactionToMessage(userMessageId, 'heart'), 500);
-
-    const menuStepMap: Record<string, SurveyStep> = {
-      rate: 'rating_flow',
-      recommend: 'activities',
-      chat: 'free_chat',
-      help: 'free_chat',
-    };
-    const menuGifMap: Record<string, GifType> = {
-      rate: 'local_vibes',
-      recommend: 'excited',
-      chat: 'local_vibes',
-      help: 'empathy',
-    };
-    const menuFallbacks: Record<string, string[]> = {
-      rate: ["I want to hear about your experience!", "What did you check out? A restaurant, beach, activity...?"],
-      recommend: ["I've got some real good spots for you.", "What are you in the mood for today?"],
-      chat: ["I'm all ears!", "What's on your mind?"],
-      help: ["I'm here to help.", "What do you need?"],
-    };
-
-    await new Promise(resolve => setTimeout(resolve, 600));
-    let menuResponse: string;
-    try {
-      menuResponse = await getEmmaAIResponseWithTimeout('menu_response', {
-        name: userName,
-        menuChoice: menuId as AIContext['menuChoice'],
-        visitCount: currentUser?.visit_count,
-        userContextSummary: userContext || undefined,
-      });
-    } catch {
-      menuResponse = '';
-    }
-
-    if (menuResponse) {
-      const chunks = splitResponseIntoMessages(menuResponse);
-      await addEmmaMessages(chunks, menuStepMap[menuId] || 'free_chat', menuGifMap[menuId] || 'excited', true);
-    } else {
-      const fallback = menuFallbacks[menuId] || menuFallbacks.chat;
-      await addEmmaMessages(fallback, menuStepMap[menuId] || 'free_chat', menuGifMap[menuId] || 'excited', true);
-    }
-  };
-
-  // Get placeholder text
   const getPlaceholder = () => {
-    switch (currentStep) {
-      case 'name': return 'Type your name...';
-      case 'email': return 'your@email.com';
-      case 'free_chat': return 'Chat with Emma...';
-      case 'rating_flow': return 'Describe what you visited...';
-      default: return 'Type a message...';
-    }
+    if (elicitationPicker) return 'Tap an option above...';
+    return 'Chat with Emma...';
   };
 
-  // Check if input should be disabled
-  const isInputDisabled = isTyping || 
-    currentStep === 'arrival' || 
-    currentStep === 'rating' || 
-    currentStep === 'activities' || 
-    currentStep === 'complete' || 
-    currentStep === 'welcome' ||
-    currentStep === 'welcome_back' ||
-    currentStep === 'main_menu' ||
-    currentStep === 'confirm_identity' ||
-    currentStep === 'splash' ||
-    currentStep === 'loading';
-
-  // Get step number for progress
-  const getStepNumber = () => {
-    const steps: SurveyStep[] = ['name', 'email', 'arrival', 'rating', 'activities'];
-    const index = steps.indexOf(currentStep);
-    return index >= 0 ? index : (currentStep === 'complete' ? steps.length : -1);
-  };
-
-  // Render splash screen
-  if (currentStep === 'splash') {
-    return <SplashScreen onComplete={checkReturningUser} />;
-  }
-
-  // Render loading screen
-  if (currentStep === 'loading') {
-    return <LoadingScreen />;
-  }
+  if (currentStep === 'splash') return <SplashScreen onComplete={checkReturningUser} />;
+  if (currentStep === 'loading') return <LoadingScreen />;
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-gradient-to-b from-sand-50 via-white to-sand-50">
       {showConfetti && <Confetti />}
-      
-      {/* Header */}
+
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-lg border-b border-sand-200 safe-area-inset">
         <div className="flex items-center gap-3 px-4 py-3">
           <EmmaAvatar />
@@ -2116,7 +1710,7 @@ export default function EmmaChat() {
               </span>
             </h1>
             <p className="text-xs text-slate-500">
-              {isReturningUser ? `Welcome back, ${userName}! 🌴` : 'Your Tobago Welcome Buddy 🌴'}
+              {isReturningUser && userName ? `Welcome back, ${userName}! 🌴` : 'Your Tobago Welcome Buddy 🌴'}
             </p>
           </div>
           <div className="flex items-center gap-1">
@@ -2126,142 +1720,84 @@ export default function EmmaChat() {
         </div>
       </header>
 
-      {/* Background */}
       <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-4 text-6xl opacity-10 animate-float">🌺</div>
         <div className="absolute top-40 right-8 text-4xl opacity-10 animate-float" style={{ animationDelay: '1s' }}>🌴</div>
-        <div className="absolute top-60 left-1/4 text-5xl opacity-10 animate-float" style={{ animationDelay: '2s' }}>🐚</div>
         <div className="absolute bottom-40 right-1/4 text-4xl opacity-10 animate-float" style={{ animationDelay: '0.5s' }}>🌊</div>
-        <div className="absolute bottom-60 left-12 text-5xl opacity-10 animate-float" style={{ animationDelay: '1.5s' }}>🦜</div>
       </div>
 
-      {/* Messages */}
       <main className="flex-1 overflow-y-auto smooth-scroll px-4 py-4 space-y-4 pb-28">
         <div className="flex justify-center">
-          <span className="px-3 py-1 rounded-full bg-sand-100 text-xs text-slate-500 font-medium">
-            Today
-          </span>
+          <span className="px-3 py-1 rounded-full bg-sand-100 text-xs text-slate-500 font-medium">Today</span>
         </div>
 
         {messages.map((message) => (
-          <MessageBubble 
-            key={message.id} 
-            message={message} 
-            onPlaceSelect={(place) => {
-              // When a place is selected, Emma comments on it
-              const comments = [
-                `${place.name} is a great choice! 🌟`,
-                `Oh I love ${place.name}! You'll have a great time.`,
-                `Excellent pick! ${place.emmaNote}`,
-              ];
-              const comment = comments[Math.floor(Math.random() * comments.length)];
-              addEmmaMessages([comment], 'free_chat');
-            }}
-          />
+          <MessageBubble key={message.id} message={message} />
         ))}
 
         {isTyping && <TypingIndicator />}
 
-        {/* "Is that you?" precursor – same style as main menu */}
         {currentStep === 'confirm_identity' && !isTyping && (
-          <ConfirmIdentitySelector
-            name={userName}
-            onConfirm={handleConfirmIdentity}
-            disabled={isTyping}
+          <ConfirmIdentitySelector name={userName} onConfirm={handleConfirmIdentity} disabled={sending} />
+        )}
+
+        {elicitationPicker === 'arrival' && !isTyping && (
+          <ArrivalSelector
+            options={ARRIVAL_OPTIONS}
+            disabled={sending}
+            onSelect={(id) => {
+              const o = ARRIVAL_OPTIONS.find(x => x.id === id);
+              handlePickerSelect(o ? `${o.emoji} ${o.label}` : id, id);
+            }}
           />
         )}
 
-        {/* Conditional UI elements */}
-        {currentStep === 'main_menu' && !isTyping && (
-          <MainMenuSelector 
-            options={MAIN_MENU_OPTIONS} 
-            onSelect={handleMainMenuSelect}
-            disabled={isTyping}
+        {elicitationPicker === 'rating' && !isTyping && (
+          <StarRating
+            disabled={sending}
+            onSelect={(rating) => handlePickerSelect(`${'⭐'.repeat(rating)} (${rating}/5)`, String(rating))}
           />
         )}
 
-        {currentStep === 'arrival' && !isTyping && (
-          <ArrivalSelector 
-            options={ARRIVAL_OPTIONS} 
-            onSelect={handleArrivalSelect}
-            disabled={isTyping}
+        {elicitationPicker === 'activity' && !isTyping && (
+          <ActivitySelector
+            options={ACTIVITY_OPTIONS}
+            disabled={sending}
+            onSelect={(id) => {
+              const o = ACTIVITY_OPTIONS.find(x => x.id === id);
+              handlePickerSelect(o ? `${o.emoji} ${o.label}` : id, id);
+            }}
           />
         )}
 
-        {currentStep === 'rating' && !isTyping && (
-          <StarRating 
-            onSelect={handleRatingSelect}
-            disabled={isTyping}
-          />
-        )}
-
-        {currentStep === 'activities' && !isTyping && (
-          <ActivitySelector 
-            options={ACTIVITY_OPTIONS} 
-            onSelect={handleActivitySelect}
-            disabled={isTyping}
-          />
-        )}
-
-        {currentStep === 'complete' && !isTyping && (
-          <CompletionCard userName={userName} />
-        )}
+        {currentStep === 'complete' && !isTyping && <CompletionCard userName={userName} />}
 
         <div ref={messagesEndRef} />
       </main>
 
-      {/* Input Footer */}
       <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg border-t border-sand-200 safe-area-bottom">
         <div className="px-4 py-3">
           <form onSubmit={handleSubmit} className="flex gap-2 items-center">
-            {currentStep === 'email' ? (
-              <EmailInput
+            <div className="flex-1 relative">
+              <input
+                ref={inputRef}
+                type="text"
                 value={input}
-                onChange={setInput}
-                onSubmit={() => handleSubmit()}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={getPlaceholder()}
                 disabled={isInputDisabled}
-                error={emailError}
+                className="w-full rounded-full border-2 border-sand-300 bg-sand-50 px-4 h-12 text-[16px] text-slate-700 placeholder:text-slate-400 focus:border-coral focus:ring-2 focus:ring-coral/20 focus:bg-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               />
-            ) : (
-              <div className="flex-1 relative">
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={getPlaceholder()}
-                  disabled={isInputDisabled}
-                  className="w-full rounded-full border-2 border-sand-300 bg-sand-50 px-4 h-12 text-[16px] text-slate-700 placeholder:text-slate-400 focus:border-coral focus:ring-2 focus:ring-coral/20 focus:bg-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-            )}
+            </div>
             <button
               type="submit"
-              disabled={isTyping || !input.trim() || isInputDisabled}
+              disabled={isInputDisabled || !input.trim()}
               className="h-12 w-12 bg-gradient-to-r from-coral to-sunset text-white rounded-full hover:shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transition-all flex items-center justify-center flex-shrink-0 active:scale-95 shadow-md"
               aria-label="Send message"
             >
               <Send className="w-5 h-5" />
             </button>
           </form>
-          
-          {/* Progress indicator - only show during survey */}
-          {getStepNumber() >= 0 && (
-            <div className="flex justify-center gap-2 mt-3">
-              {['name', 'email', 'arrival', 'rating', 'activities'].map((step, index) => (
-                <div
-                  key={step}
-                  className={`h-1.5 rounded-full transition-all duration-500 ${
-                    getStepNumber() === index
-                      ? 'w-8 bg-gradient-to-r from-coral to-sunset'
-                      : getStepNumber() > index || currentStep === 'complete'
-                      ? 'w-4 bg-palm'
-                      : 'w-4 bg-sand-300'
-                  }`}
-                />
-              ))}
-            </div>
-          )}
         </div>
       </footer>
     </div>

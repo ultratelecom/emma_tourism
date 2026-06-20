@@ -33,10 +33,23 @@
  *        POST /api/ava/turn with the full user reply as turn 1.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import gsap from 'gsap';
 import Image from 'next/image';
 import { Check, CheckCheck, Send, MapPin } from 'lucide-react';
-import { AVA_PERSONALITY } from '@/lib/ava-config';
+import { computeFactionPointsForMessage } from '@/lib/ava-faction';
+import { GenerationRootsPicker } from './GenerationRootsPicker';
+import { VisitFrequencyPicker } from './VisitFrequencyPicker';
+import { ConnectionScorePicker } from './ConnectionScorePicker';
+import { InvestIntentPicker } from './InvestIntentPicker';
 
 // ============================================
 // CONSTANTS
@@ -44,8 +57,60 @@ import { AVA_PERSONALITY } from '@/lib/ava-config';
 
 const AVA_AVATAR_URL = '/ava/avatar.png';
 const LS_TOKEN = 'ava.session_token';
-// Single source of truth: the same string the server writes as turn 0.
-const OPENER_TEXT = AVA_PERSONALITY.opening_line;
+
+/**
+ * Ava's opener is built from a small pool of beats that vary by load. The
+ * middles describe a specific *moment* (coffee, the bay, the wind) instead of
+ * paraphrasing the same fact, so reloads feel different rather than scripted.
+ * All lines respect the v2 voice rules: plain English, no metaphors, no
+ * brochure flavor, no stacked dialect.
+ */
+const AVA_OPENER_BEAT_1 = [
+  "Hey! I'm Ava.",
+  "Hi, I'm Ava.",
+  "Hey there. Ava here.",
+  "Hi, I'm Ava — nice to meet you.",
+];
+
+const AVA_OPENER_MIDDLES = [
+  "I'm in Castara, Tobago. Most days I'm just chatting with people from home who live overseas.",
+  "I live in Castara, a small fishing village in Tobago. I talk with Trinbagonians abroad about home.",
+  "I'm in Castara — a quiet bay in Tobago. I spend my days catching up with people who left the island.",
+  "From Castara, Tobago. Just made some coffee, finally sitting down.",
+  "I'm in Castara, Tobago. The sea is loud today, sorry if I sound distracted.",
+  "Castara, Tobago. Was down by the boats this morning, just back now.",
+  "I'm in Castara, Tobago — talking with Trinbagonians abroad about home is what I do most days.",
+  "Castara, Tobago is home. Quiet morning here, good time to chat.",
+  "From Castara, Tobago. Lots of people from home check in from all over, that's a lot of my day.",
+  "I'm in Castara, Tobago. Spent the morning walking to Heavenly Bay, finally settled in.",
+  "I live in Castara — small place in Tobago, leeward side. Mostly I talk with people from home who live abroad.",
+  "I'm in Castara, Tobago. Bit windy today, but a good day to chat.",
+];
+
+const AVA_OPENER_BEAT_3 = [
+  "What should I call you?",
+  "What's your name?",
+  "Before anything, what's your name?",
+  "So — what's your name?",
+  "Tell me your name first?",
+];
+
+function pickFrom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function buildDynamicOpener(): string {
+  return `${pickFrom(AVA_OPENER_BEAT_1)}\n\n${pickFrom(AVA_OPENER_MIDDLES)}\n\n${pickFrom(AVA_OPENER_BEAT_3)}`;
+}
+
+/** Points per level and per bar visual cycle (0–100% fill). */
+const FACTION_POINTS_PER_LEVEL = 100;
+const FACTION_BUCKET_PTS = FACTION_POINTS_PER_LEVEL;
+
+function factionBarPercent(points: number): number {
+  if (points <= 0) return 0;
+  return ((points % FACTION_BUCKET_PTS) / FACTION_BUCKET_PTS) * 100;
+}
 
 // Typewriter reveal speed in characters-per-second. Must stay in sync
 // with the <Typewriter /> component's default cps below. We also use it
@@ -120,11 +185,55 @@ interface SessionOpenResponse {
   chapter_id: string | null;
 }
 
-/** Metadata carried in X-* response headers from the streaming turn route. */
+/**
+ * Metadata from X-* headers on streamed turn responses: GIF cue,
+ * turn index, chapter, and roots-picker elicitation.
+ */
 interface TurnStreamMeta {
   gif_cue: GifCue | null;
   turn_index: number;
   chapter_id: string | null;
+  elicit_roots: boolean;
+  elicit_visit: boolean;
+  elicit_connection: boolean;
+  elicit_invest: boolean;
+}
+
+type ElicitationKind = 'roots' | 'visit' | 'connection' | 'invest';
+
+const EMPTY_TURN_STREAM_META: TurnStreamMeta = {
+  gif_cue: null,
+  turn_index: 0,
+  chapter_id: null,
+  elicit_roots: false,
+  elicit_visit: false,
+  elicit_connection: false,
+  elicit_invest: false,
+};
+
+function parseTurnStreamMeta(headers: Headers | null | undefined): TurnStreamMeta {
+  if (!headers) return { ...EMPTY_TURN_STREAM_META };
+  return {
+    gif_cue: (headers.get('x-gif-cue') || null) as GifCue | null,
+    turn_index: parseInt(headers.get('x-turn-index') || '0', 10),
+    chapter_id: headers.get('x-chapter-id'),
+    elicit_roots: headers.get('x-elicit-roots') === '1',
+    elicit_visit: headers.get('x-elicit-visit') === '1',
+    elicit_connection: headers.get('x-elicit-connection') === '1',
+    elicit_invest: headers.get('x-elicit-invest') === '1',
+  };
+}
+
+/** Which picker to show — driven only by stream headers (after server sync). */
+function pickActiveElicitation(
+  meta: TurnStreamMeta | null | undefined,
+): ElicitationKind | null {
+  if (!meta) return null;
+  if (meta.elicit_roots) return 'roots';
+  if (meta.elicit_visit) return 'visit';
+  if (meta.elicit_connection) return 'connection';
+  if (meta.elicit_invest) return 'invest';
+  return null;
 }
 
 /**
@@ -141,6 +250,25 @@ interface FlyingHeart {
   dy: number;
 }
 
+/** +N orb flying from user bubble to the faction bar. */
+interface FlyingFactionOrb {
+  id: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  amount: number;
+  /** Big roots-pick: longer flight + chat “fuel” pulse */
+  fuelSurge?: boolean;
+}
+
+type FactionOriginRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 // ============================================
 // PAGE
 // ============================================
@@ -155,18 +283,72 @@ export default function AvaPage() {
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [chapter, setChapter] = useState<string | null>(null);
+  const [factionPoints, setFactionPoints] = useState(0);
+  /** Bumped when faction points land from the flying orb — drives header number pop. */
+  const [factionLandTick, setFactionLandTick] = useState(0);
+  const [elicitationPicker, setElicitationPicker] = useState<ElicitationKind | null>(
+    null,
+  );
 
   // Hearts flying from the user's bubble to Ava's avatar — rendered in
   // a fixed-position overlay so they can arc across the whole chat.
   const [flyingHearts, setFlyingHearts] = useState<FlyingHeart[]>([]);
+  const [flyingFactionOrbs, setFlyingFactionOrbs] = useState<FlyingFactionOrb[]>([]);
   // When a heart lands on Ava's avatar, her ring pulses coral for ~900ms.
   const [avatarGlow, setAvatarGlow] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  /** Full-screen warm pulse when a big faction bundle lands (e.g. roots pick). */
+  const chatFuelRef = useRef<HTMLDivElement>(null);
+  const pageRootRef = useRef<HTMLDivElement>(null);
+  const levelUpVeilRef = useRef<HTMLDivElement>(null);
+
+  const playLevelUpCelebration = useCallback((_level: number) => {
+    if (typeof window === 'undefined') return;
+    const veil = levelUpVeilRef.current;
+    if (!veil) return;
+
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    gsap.killTweensOf(veil);
+    // Subtle edge pulse only: the screen border glows warm and fades. No
+    // full-screen veil, no label, no shake.
+    gsap
+      .timeline()
+      .fromTo(
+        veil,
+        { opacity: 0 },
+        { opacity: 1, duration: reduce ? 0.2 : 0.32, ease: 'power2.out' },
+      )
+      .to(veil, {
+        opacity: 0,
+        duration: reduce ? 0.4 : 1.1,
+        ease: 'power2.inOut',
+      });
+  }, []);
+
+  const applyFactionDelta = useCallback(
+    (delta: number) => {
+      if (delta <= 0) return;
+      setFactionPoints((prev) => {
+        const next = prev + delta;
+        const oldLv = Math.floor(prev / FACTION_POINTS_PER_LEVEL);
+        const newLv = Math.floor(next / FACTION_POINTS_PER_LEVEL);
+        if (newLv > oldLv) {
+          let step = 0;
+          for (let lv = oldLv + 1; lv <= newLv; lv++) {
+            const level = lv;
+            window.setTimeout(() => playLevelUpCelebration(level), step * 720);
+            step++;
+          }
+        }
+        return next;
+      });
+    },
+    [playLevelUpCelebration],
+  );
 
   // Keep the tail of the transcript pinned to the bottom as the
   // conversation grows. Deferred through two animation frames so new
@@ -180,14 +362,30 @@ export default function AvaPage() {
     let raf2 = 0;
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        if (elicitationPicker) {
+          scrollRef.current
+            ?.querySelector<HTMLElement>('[data-last-transcript-item]')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } else {
+          endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
       });
     });
     return () => {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
     };
-  }, [messages, avaTyping, phase]);
+  }, [messages, avaTyping, phase, elicitationPicker]);
+
+  useEffect(() => {
+    if (!elicitationPicker || phase !== 'chat') return;
+    const scrollLast = () =>
+      scrollRef.current
+        ?.querySelector<HTMLElement>('[data-last-transcript-item]')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const ids = [80, 400, 950].map((ms) => window.setTimeout(scrollLast, ms));
+    return () => ids.forEach(clearTimeout);
+  }, [elicitationPicker, phase, messages.length]);
 
   // Also watch the transcript for any in-flight layout changes (images
   // loading, GIFs decoding, virtual keyboard opening) and re-pin to
@@ -196,11 +394,17 @@ export default function AvaPage() {
     if (phase !== 'chat' || !scrollRef.current) return;
     const el = scrollRef.current;
     const ro = new ResizeObserver(() => {
-      endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      if (elicitationPicker) {
+        scrollRef.current
+          ?.querySelector<HTMLElement>('[data-last-transcript-item]')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } else {
+        endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [phase]);
+  }, [phase, elicitationPicker]);
 
   // Splash → loading → chat transition.
   //
@@ -231,7 +435,7 @@ export default function AvaPage() {
       // indicator between each. The composer is focusable the whole
       // time so the user can start typing their name whenever.
       setTimeout(() => inputRef.current?.focus(), 80);
-      void stageOpener(OPENER_TEXT);
+      void stageOpener(buildDynamicOpener());
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
@@ -345,6 +549,153 @@ export default function AvaPage() {
   }, []);
 
   /**
+   * Animate +points from the user's message bubble into the top-right faction bar,
+   * then apply points and tween the bar fill.
+   */
+  const scheduleFactionPointsFly = useCallback(
+    (
+      bubbleId: string | null,
+      delta: number,
+      opts?: { originRect?: FactionOriginRect; fuelSurge?: boolean },
+    ) => {
+      if (delta <= 0 || typeof window === 'undefined') return;
+      const flyId = `ff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const fuelSurge = opts?.fuelSurge ?? false;
+      const originRect = opts?.originRect;
+
+      const launch = () => {
+        const track = document.querySelector<HTMLElement>('[data-faction-bar-track]');
+        if (!track) {
+          applyFactionDelta(delta);
+          return;
+        }
+        const t = track.getBoundingClientRect();
+        const endX = t.left + t.width * 0.92;
+        const endY = t.top + t.height / 2;
+
+        let startX: number;
+        let startY: number;
+
+        if (originRect) {
+          startX = originRect.left + originRect.width / 2;
+          startY = originRect.top + originRect.height / 2;
+        } else if (bubbleId) {
+          const bubble = document.querySelector<HTMLElement>(
+            `[data-bubble-id="${CSS.escape(bubbleId)}"]`,
+          );
+          if (!bubble) {
+            applyFactionDelta(delta);
+            return;
+          }
+          const b = bubble.getBoundingClientRect();
+          startX = b.right - b.width * 0.12;
+          startY = b.top + b.height * 0.35;
+        } else {
+          applyFactionDelta(delta);
+          return;
+        }
+
+        setFlyingFactionOrbs((prev) => [
+          ...prev,
+          {
+            id: flyId,
+            startX,
+            startY,
+            endX,
+            endY,
+            amount: delta,
+            fuelSurge,
+          },
+        ]);
+      };
+
+      requestAnimationFrame(() => requestAnimationFrame(launch));
+    },
+    [applyFactionDelta],
+  );
+
+  const resolveFactionOrb = useCallback(
+    (flyId: string, delta: number, fuelSurge?: boolean) => {
+      setFlyingFactionOrbs((prev) => prev.filter((o) => o.id !== flyId));
+      applyFactionDelta(delta);
+      setFactionLandTick((n) => n + 1);
+      requestAnimationFrame(() => {
+        const track = document.querySelector<HTMLElement>('[data-faction-bar-track]');
+        if (track) {
+          const fromGlow = fuelSurge
+            ? '0 0 0 0 rgba(251, 146, 60, 0.55), 0 0 28px 6px rgba(251, 146, 60, 0.35)'
+            : '0 0 0 0 rgba(251, 146, 60, 0.45)';
+          gsap.fromTo(
+            track,
+            { boxShadow: fromGlow },
+            {
+              boxShadow: '0 0 0 0 rgba(251, 146, 60, 0)',
+              duration: fuelSurge ? 0.85 : 0.55,
+              ease: 'power2.out',
+            },
+          );
+          const fill = track.querySelector<HTMLElement>('[data-faction-bar-fill]');
+          if (fill) {
+            gsap.killTweensOf(fill);
+            gsap.fromTo(
+              fill,
+              {
+                filter: 'brightness(1.5) saturate(1.25)',
+                scaleY: 1.18,
+              },
+              {
+                filter: 'brightness(1) saturate(1)',
+                scaleY: 1,
+                duration: fuelSurge ? 0.62 : 0.48,
+                ease: 'elastic.out(1, 0.55)',
+                transformOrigin: '50% 100%',
+              },
+            );
+          }
+          const shimmer = track.querySelector<HTMLElement>(
+            '[data-faction-bar-shimmer]',
+          );
+          if (shimmer) {
+            gsap.killTweensOf(shimmer);
+            gsap
+              .timeline()
+              .fromTo(
+                shimmer,
+                { xPercent: -140, opacity: 0 },
+                { xPercent: -35, opacity: 0.95, duration: 0.1, ease: 'power2.out' },
+              )
+              .to(shimmer, {
+                xPercent: 130,
+                opacity: 0,
+                duration: fuelSurge ? 0.62 : 0.48,
+                ease: 'power2.inOut',
+              });
+          }
+        }
+        if (fuelSurge) {
+          const veil = chatFuelRef.current;
+          if (veil) {
+            gsap.killTweensOf(veil);
+            gsap
+              .timeline()
+              .fromTo(
+                veil,
+                { opacity: 0 },
+                { opacity: 1, duration: 0.2, ease: 'power2.out' },
+              )
+              .to(veil, {
+                opacity: 0,
+                duration: 0.65,
+                ease: 'sine.inOut',
+              });
+          }
+        }
+      });
+    },
+    [applyFactionDelta],
+  );
+
+  /**
    * Schedule a reaction on the given user bubble: heart pops in, holds
    * for ~1.1s, then detaches and flies to Ava's avatar. This is the
    * one entry point used by both the first-turn and normal-turn flows.
@@ -364,6 +715,144 @@ export default function AvaPage() {
   );
 
   // =========================================================
+  // Consume a streaming turn once the server response is OK.
+  // =========================================================
+  const runStreamingTurn = useCallback(
+    async ({
+      sessionId: sid,
+      userId: uid,
+      message,
+      optimisticId,
+      streamKind,
+    }: {
+      sessionId: string;
+      userId: string;
+      message: string;
+      optimisticId: string;
+      streamKind: 'first' | 'follow';
+    }) => {
+      const trimmed = message.trim();
+
+      // Watchdog: abort if no headers in 12s or no tokens for 20s. Without this
+      // a model hang leaves the UI typing forever.
+      const ctl = new AbortController();
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const HEADERS_TIMEOUT_MS = 12_000;
+      const IDLE_TIMEOUT_MS = 20_000;
+      const resetIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(
+          () => ctl.abort(new Error('idle-timeout')),
+          IDLE_TIMEOUT_MS,
+        );
+      };
+      const headersTimer = setTimeout(
+        () => ctl.abort(new Error('headers-timeout')),
+        HEADERS_TIMEOUT_MS,
+      );
+
+      let res: Response;
+      try {
+        res = await fetch('/api/ava/turn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sid,
+            user_id: uid,
+            message: trimmed,
+          }),
+          signal: ctl.signal,
+        });
+      } finally {
+        clearTimeout(headersTimer);
+      }
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        const errMsg =
+          typeof errBody.error === 'string'
+            ? errBody.error
+            : `turn failed (${res.status})`;
+        throw new Error(errMsg);
+      }
+
+      const meta = parseTurnStreamMeta(res.headers);
+      if (meta.chapter_id) setChapter(meta.chapter_id);
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === optimisticId ? { ...m, read: true } : m)),
+      );
+      await new Promise((r) => setTimeout(r, 180));
+      setAvaTyping(false);
+
+      const streamId =
+        streamKind === 'first'
+          ? `ava-stream-first-${Date.now()}`
+          : `ava-stream-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: streamId,
+          sender: 'ava',
+          kind: 'text',
+          content: '',
+          timestamp: new Date(),
+          animate: true,
+          typewriter: false,
+        },
+      ]);
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      let rafPending = false;
+      resetIdleTimer();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          resetIdleTimer();
+          accumulated += decoder.decode(value, { stream: true });
+          if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(() => {
+              const snap = accumulated;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === streamId ? { ...m, content: snap } : m)),
+              );
+              rafPending = false;
+            });
+          }
+        }
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+      }
+      accumulated += decoder.decode();
+
+      const finalText = accumulated.trim();
+      const tone = detectTone(finalText);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamId
+            ? { ...m, content: finalText || '...', tone, isHero: tone !== undefined }
+            : m,
+        ),
+      );
+
+      // Quick-option pickers are disabled for now — the free-flow chat covers
+      // these fields conversationally. Keep the infra (pickActiveElicitation,
+      // the picker components) so they can be re-enabled later if desired.
+      // setElicitationPicker(pickActiveElicitation(meta));
+      setElicitationPicker(null);
+
+      if (meta.gif_cue) {
+        void playGif(meta.gif_cue, (m) => setMessages((prev) => [...prev, m]));
+      }
+    },
+    [],
+  );
+
+  // =========================================================
   // Pre-session: first user reply creates the session, then
   // runs the reply itself as turn 1.
   // =========================================================
@@ -372,6 +861,8 @@ export default function AvaPage() {
       const name = extractName(firstMessage);
       setSending(true);
       setError(null);
+
+      const factionDelta = computeFactionPointsForMessage(firstMessage);
 
       const optimisticId = `pending-${Date.now()}`;
       setMessages((prev) => [
@@ -388,6 +879,7 @@ export default function AvaPage() {
         },
       ]);
       setInput('');
+      scheduleFactionPointsFly(optimisticId, factionDelta);
       setAvaTyping(true);
 
       // Reaction: give Ava a beat, tap a heart onto the user's bubble,
@@ -407,90 +899,18 @@ export default function AvaPage() {
         }
         const openData: SessionOpenResponse = await openRes.json();
         setSessionId(openData.session_id);
-        setSessionToken(openData.session_token);
         setUserId(openData.user_id);
         setChapter(openData.chapter_id);
         // Deliberately do NOT persist the session token to localStorage.
         // Every page load starts a fresh conversation from the opener.
 
-        // Now send the user's first message as turn 1 (streaming).
-        const turnRes = await fetch('/api/ava/turn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: openData.session_id,
-            user_id: openData.user_id,
-            message: firstMessage,
-          }),
+        await runStreamingTurn({
+          sessionId: openData.session_id,
+          userId: openData.user_id,
+          message: firstMessage,
+          optimisticId,
+          streamKind: 'first',
         });
-        if (!turnRes.ok) {
-          const body = await turnRes.json().catch(() => ({}));
-          throw new Error(body.error || `turn failed (${turnRes.status})`);
-        }
-
-        const meta: TurnStreamMeta = {
-          gif_cue: (turnRes.headers.get('x-gif-cue') || null) as GifCue | null,
-          turn_index: parseInt(turnRes.headers.get('x-turn-index') || '0', 10),
-          chapter_id: turnRes.headers.get('x-chapter-id') || null,
-        };
-        if (meta.chapter_id) setChapter(meta.chapter_id);
-
-        setMessages((prev) =>
-          prev.map((m) => (m.id === optimisticId ? { ...m, read: true } : m)),
-        );
-        await new Promise((r) => setTimeout(r, 180));
-        setAvaTyping(false);
-
-        const streamId = `ava-stream-first-${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: streamId,
-            sender: 'ava',
-            kind: 'text',
-            content: '',
-            timestamp: new Date(),
-            animate: true,
-            typewriter: false,
-          },
-        ]);
-
-        const reader = turnRes.body!.getReader();
-        const decoder = new TextDecoder();
-        let accumulated = '';
-        let rafPending = false;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          accumulated += decoder.decode(value, { stream: true });
-          if (!rafPending) {
-            rafPending = true;
-            requestAnimationFrame(() => {
-              const snap = accumulated;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === streamId ? { ...m, content: snap } : m)),
-              );
-              rafPending = false;
-            });
-          }
-        }
-        accumulated += decoder.decode();
-
-        const finalText = accumulated.trim();
-        const tone = detectTone(finalText);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === streamId
-              ? { ...m, content: finalText || '...', tone, isHero: tone !== undefined }
-              : m,
-          ),
-        );
-
-        if (meta.gif_cue) {
-          void playGif(meta.gif_cue, (m) =>
-            setMessages((prev) => [...prev, m]),
-          );
-        }
       } catch (err) {
         setAvaTyping(false);
         setError(err instanceof Error ? err.message : 'Something went wrong');
@@ -499,15 +919,29 @@ export default function AvaPage() {
         setTimeout(() => inputRef.current?.focus(), 50);
       }
     },
-    [scheduleReactionAndFly],
+    [scheduleReactionAndFly, runStreamingTurn, scheduleFactionPointsFly],
   );
 
   // =========================================================
   // In-session: streaming turn loop.
   // =========================================================
   const sendTurn = useCallback(
-    async (text: string) => {
+    async (
+      text: string,
+      opts?: {
+        rootsBonus?: number;
+        pickerBonus?: number;
+        factionOriginRect?: FactionOriginRect;
+        fuelSurge?: boolean;
+      },
+    ) => {
       if (!sessionId || !userId || !text.trim() || sending) return;
+      const trimmed = text.trim();
+      const factionDelta =
+        computeFactionPointsForMessage(trimmed) +
+        (opts?.rootsBonus ?? 0) +
+        (opts?.pickerBonus ?? 0);
+
       setSending(true);
       setError(null);
 
@@ -518,7 +952,7 @@ export default function AvaPage() {
           id: optimisticId,
           sender: 'user',
           kind: 'text',
-          content: text.trim(),
+          content: trimmed,
           timestamp: new Date(),
           delivered: true,
           read: false,
@@ -526,99 +960,23 @@ export default function AvaPage() {
         },
       ]);
       setInput('');
+      scheduleFactionPointsFly(opts?.factionOriginRect ? null : optimisticId, factionDelta, {
+        originRect: opts?.factionOriginRect,
+        fuelSurge: opts?.fuelSurge,
+      });
       setAvaTyping(true);
 
-      const reactionEmoji = pickReaction(text);
+      const reactionEmoji = pickReaction(trimmed);
       if (reactionEmoji) scheduleReactionAndFly(optimisticId, reactionEmoji);
 
       try {
-        const res = await fetch('/api/ava/turn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: sessionId,
-            user_id: userId,
-            message: text.trim(),
-          }),
+        await runStreamingTurn({
+          sessionId,
+          userId,
+          message: trimmed,
+          optimisticId,
+          streamKind: 'follow',
         });
-
-        if (!res.ok) {
-          // Non-streaming error — read JSON body
-          const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `turn failed (${res.status})`);
-        }
-
-        // Read metadata from response headers (available before body is consumed)
-        const meta: TurnStreamMeta = {
-          gif_cue: (res.headers.get('x-gif-cue') || null) as GifCue | null,
-          turn_index: parseInt(res.headers.get('x-turn-index') || '0', 10),
-          chapter_id: res.headers.get('x-chapter-id') || null,
-        };
-
-        if (meta.chapter_id) setChapter(meta.chapter_id);
-
-        // Mark user message as read
-        setMessages((prev) =>
-          prev.map((m) => (m.id === optimisticId ? { ...m, read: true } : m)),
-        );
-
-        // Brief pause then switch from typing indicator to live bubble
-        await new Promise((r) => setTimeout(r, 180));
-        setAvaTyping(false);
-
-        // Insert a streaming bubble with empty content — it grows as chunks arrive
-        const streamId = `ava-stream-${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: streamId,
-            sender: 'ava',
-            kind: 'text',
-            content: '',
-            timestamp: new Date(),
-            animate: true,
-            typewriter: false, // content fills live via state updates
-          },
-        ]);
-
-        // Read the stream, batching state updates via requestAnimationFrame
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let accumulated = '';
-        let rafPending = false;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          accumulated += decoder.decode(value, { stream: true });
-
-          if (!rafPending) {
-            rafPending = true;
-            requestAnimationFrame(() => {
-              const snap = accumulated;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === streamId ? { ...m, content: snap } : m)),
-              );
-              rafPending = false;
-            });
-          }
-        }
-        accumulated += decoder.decode(); // final flush
-
-        // Finalize: apply tone glow on the now-complete bubble
-        const finalText = accumulated.trim();
-        const tone = detectTone(finalText);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === streamId
-              ? { ...m, content: finalText || '...', tone, isHero: tone !== undefined }
-              : m,
-          ),
-        );
-
-        if (meta.gif_cue) {
-          void playGif(meta.gif_cue, (m) => setMessages((prev) => [...prev, m]));
-        }
       } catch (err) {
         setAvaTyping(false);
         setError(err instanceof Error ? err.message : 'Turn failed');
@@ -627,7 +985,7 @@ export default function AvaPage() {
         setTimeout(() => inputRef.current?.focus(), 50);
       }
     },
-    [sessionId, userId, sending, scheduleReactionAndFly],
+    [sessionId, userId, sending, scheduleReactionAndFly, runStreamingTurn, scheduleFactionPointsFly],
   );
 
   // Split long replies into up-to-two bubbles with a small pause, so
@@ -685,18 +1043,6 @@ export default function AvaPage() {
     else void createSessionAndFirstTurn(text);
   };
 
-  const resetSession = useCallback(() => {
-    if (typeof window !== 'undefined') localStorage.removeItem(LS_TOKEN);
-    setSessionId(null);
-    setUserId(null);
-    setSessionToken(null);
-    setChapter(null);
-    setMessages([]);
-    setInput('');
-    setError(null);
-    setPhase('splash');
-  }, []);
-
   // =========================================================
   // RENDER
   // =========================================================
@@ -710,39 +1056,120 @@ export default function AvaPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-br from-sand-50 via-white to-sand-100">
+    <div
+      ref={pageRootRef}
+      className="flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-br from-sand-50 via-white to-sand-100"
+    >
       <Header
-        onReset={sessionToken ? resetSession : null}
         chapter={chapter}
         typing={avaTyping}
         avatarGlow={avatarGlow}
+        factionPoints={factionPoints}
+        factionLandTick={factionLandTick}
       />
 
-      <div
-        ref={scrollRef}
-        className="flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 md:px-8"
-      >
-        {messages.map((m) =>
-          m.kind === 'gif' && m.gifUrl ? (
-            <GifMessage key={m.id} url={m.gifUrl} title={m.content} />
-          ) : (
-            <MessageBubble key={m.id} message={m} />
-          ),
-        )}
-        {avaTyping && <TypingIndicator />}
-        {error && (
-          <div className="mx-auto max-w-md rounded-2xl border border-red-300 bg-red-50 px-4 py-2 text-center text-sm text-red-700 shadow-sm">
-            {error}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={chatFuelRef}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-[5]"
+          style={{
+            opacity: 0,
+            background:
+              'radial-gradient(ellipse 130% 90% at 50% 95%, rgba(251, 191, 36, 0.28), transparent 55%), radial-gradient(ellipse 100% 70% at 50% 20%, rgba(249, 115, 22, 0.14), transparent 52%)',
+          }}
+        />
+        <div
+          ref={scrollRef}
+          className={`relative z-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 md:px-8 ${elicitationPicker ? 'pb-6 pt-2' : ''}`}
+        >
+          {messages.map((m, i) => {
+            const isLast = i === messages.length - 1;
+            const inner =
+              m.kind === 'gif' && m.gifUrl ? (
+                <GifMessage url={m.gifUrl} title={m.content} />
+              ) : (
+                <MessageBubble message={m} />
+              );
+            return (
+              <div
+                key={m.id}
+                className={isLast ? 'scroll-mt-1' : undefined}
+                data-last-transcript-item={isLast ? true : undefined}
+              >
+                {inner}
+              </div>
+            );
+          })}
+          {avaTyping && <TypingIndicator />}
+          {error && (
+            <div className="mx-auto max-w-md rounded-2xl border border-red-300 bg-red-50 px-4 py-2 text-center text-sm text-red-700 shadow-sm">
+              {error}
+            </div>
+          )}
+          <div ref={endRef} aria-hidden className="h-1 w-full" />
+        </div>
+
+        {elicitationPicker && phase === 'chat' && sessionId ? (
+          <div className="relative z-10 max-h-[38vh] shrink-0 overflow-y-auto border-t border-sand-200/80 bg-sand-50/90 backdrop-blur-sm supports-[backdrop-filter]:bg-sand-50/75">
+            {elicitationPicker === 'roots' ? (
+              <GenerationRootsPicker
+                disabled={sending}
+                onCommitted={({ message, rect }) => {
+                  setElicitationPicker(null);
+                  void sendTurn(message, {
+                    rootsBonus: 100,
+                    factionOriginRect: rect,
+                    fuelSurge: true,
+                  });
+                }}
+              />
+            ) : elicitationPicker === 'visit' ? (
+              <VisitFrequencyPicker
+                disabled={sending}
+                onCommitted={({ message, rect }) => {
+                  setElicitationPicker(null);
+                  void sendTurn(message, {
+                    pickerBonus: 55,
+                    factionOriginRect: rect,
+                    fuelSurge: false,
+                  });
+                }}
+              />
+            ) : elicitationPicker === 'connection' ? (
+              <ConnectionScorePicker
+                disabled={sending}
+                onCommitted={({ message, rect }) => {
+                  setElicitationPicker(null);
+                  void sendTurn(message, {
+                    pickerBonus: 55,
+                    factionOriginRect: rect,
+                    fuelSurge: false,
+                  });
+                }}
+              />
+            ) : (
+              <InvestIntentPicker
+                disabled={sending}
+                onCommitted={({ message, rect }) => {
+                  setElicitationPicker(null);
+                  void sendTurn(message, {
+                    pickerBonus: 55,
+                    factionOriginRect: rect,
+                    fuelSurge: false,
+                  });
+                }}
+              />
+            )}
           </div>
-        )}
-        <div ref={endRef} aria-hidden className="h-1 w-full" />
+        ) : null}
       </div>
 
       <Composer
         value={input}
         onChange={setInput}
         onSend={onSend}
-        disabled={sending}
+        disabled={sending || !!elicitationPicker}
         inputRef={inputRef}
       />
 
@@ -753,6 +1180,18 @@ export default function AvaPage() {
         aria-hidden
         className="pointer-events-none fixed inset-0 z-40"
       >
+        {flyingFactionOrbs.map((o) => (
+          <FlyingFactionOrb
+            key={o.id}
+            startX={o.startX}
+            startY={o.startY}
+            endX={o.endX}
+            endY={o.endY}
+            amount={o.amount}
+            fuelSurge={o.fuelSurge}
+            onArrive={() => resolveFactionOrb(o.id, o.amount, o.fuelSurge)}
+          />
+        ))}
         {flyingHearts.map((h) => (
           <span
             key={h.id}
@@ -763,13 +1202,23 @@ export default function AvaPage() {
                 top: h.startY,
                 ['--dx' as string]: `${h.dx}px`,
                 ['--dy' as string]: `${h.dy}px`,
-              } as React.CSSProperties
+              } as CSSProperties
             }
           >
             {h.emoji}
           </span>
         ))}
       </div>
+
+      <div
+        ref={levelUpVeilRef}
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-[70] opacity-0"
+        style={{
+          boxShadow:
+            'inset 0 0 60px 12px rgba(250, 204, 21, 0.55), inset 0 0 140px 30px rgba(249, 115, 22, 0.35)',
+        }}
+      />
     </div>
   );
 }
@@ -832,14 +1281,19 @@ function extractName(input: string): string {
   return fallback.charAt(0).toUpperCase() + fallback.slice(1);
 }
 
+// Words that signal a heavy / grief / hardship moment — Ava shouldn't react
+// with a sparkly heart while the user just told her something painful.
+const HARDSHIP_REACTION_RE =
+  /\b(died|passed|funeral|cancer|chemo|hospital|laid off|fired|evicted|homeless|divorce|grieving|loss|broken|broke up|miscarriage)\b/i;
+
 /**
- * Reaction picker. Per explicit user direction: Ava hearts EVERY
- * substantive message. No mix, no variety — she's just genuinely
- * glad to hear you. Empty messages get no reaction.
+ * Reaction picker. Suppress the heart on heavy/grief content so the UX
+ * doesn't read as performative when the user shared something painful.
  */
 function pickReaction(message: string): string | null {
   const t = message.trim();
   if (t.length === 0) return null;
+  if (HARDSHIP_REACTION_RE.test(t)) return null;
   return '❤️';
 }
 
@@ -909,6 +1363,98 @@ function splitReply(text: string): string[] {
     return [match[1].trim(), match[2].trim()];
   }
   return [trimmed];
+}
+
+// ============================================
+// UI: FLYING FACTION ORB (+points → bar)
+// ============================================
+
+function FlyingFactionOrb({
+  startX,
+  startY,
+  endX,
+  endY,
+  amount,
+  fuelSurge,
+  onArrive,
+}: {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  amount: number;
+  fuelSurge?: boolean;
+  onArrive: () => void;
+}) {
+  const elRef = useRef<HTMLDivElement>(null);
+  const arriveRef = useRef(onArrive);
+  arriveRef.current = onArrive;
+
+  useLayoutEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    const surge = !!fuelSurge;
+    const ctx = gsap.context(() => {
+      gsap.set(el, {
+        left: startX,
+        top: startY,
+        xPercent: -50,
+        yPercent: -50,
+        scale: surge ? 0.35 : 0.45,
+        opacity: 0,
+        rotation: 0,
+        force3D: true,
+      });
+      const tl = gsap.timeline({
+        onComplete: () => arriveRef.current(),
+      });
+      tl.to(el, {
+        scale: surge ? 1.24 : 1.08,
+        opacity: 1,
+        duration: surge ? 0.22 : 0.16,
+        ease: surge ? 'back.out(2.45)' : 'back.out(2.1)',
+      });
+      if (surge) {
+        tl.to(
+          el,
+          {
+            rotation: 8,
+            duration: 0.12,
+            ease: 'power1.out',
+          },
+          '-=0.08',
+        );
+      }
+      tl.to(el, {
+        left: endX,
+        top: endY,
+        scale: surge ? 1 : 0.9,
+        rotation: 0,
+        opacity: 0.98,
+        duration: surge ? 0.92 : 0.68,
+        ease: surge ? 'power1.inOut' : 'power2.inOut',
+      }).to(el, {
+        opacity: 0,
+        scale: surge ? 0.62 : 0.55,
+        duration: surge ? 0.2 : 0.16,
+        ease: 'power2.in',
+      });
+    }, el);
+    return () => ctx.revert();
+  }, [startX, startY, endX, endY, fuelSurge]);
+
+  return (
+    <div
+      ref={elRef}
+      className={`pointer-events-none fixed z-[45] rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-coral px-2.5 py-1.5 text-[13px] font-bold tabular-nums text-white ring-2 ring-white/95 ${
+        fuelSurge
+          ? 'shadow-[0_8px_36px_rgba(251,146,60,0.55)]'
+          : 'shadow-[0_4px_20px_rgba(251,146,60,0.45)]'
+      }`}
+    >
+      +{amount}
+    </div>
+  );
 }
 
 // ============================================
@@ -1019,27 +1565,48 @@ function LoadingScreen() {
 // ============================================
 
 function Header({
-  onReset,
   chapter,
   typing,
   avatarGlow,
+  factionPoints,
+  factionLandTick,
 }: {
-  onReset: (() => void) | null;
   chapter: string | null;
   typing: boolean;
   avatarGlow: boolean;
+  factionPoints: number;
+  factionLandTick: number;
 }) {
+  const barPct = factionBarPercent(factionPoints);
+  const scoreRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    if (factionLandTick === 0) return;
+    const el = scoreRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    gsap.fromTo(
+      el,
+      { scale: 1.2 },
+      {
+        scale: 1,
+        duration: 0.48,
+        ease: 'back.out(2.8)',
+      },
+    );
+  }, [factionLandTick]);
+
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-sand-200 bg-white/80 px-4 py-3 backdrop-blur-md md:px-8">
-      <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-sand-200 bg-white/80 px-4 py-3 backdrop-blur-md md:gap-5 md:px-8">
+      <div className="flex min-w-0 flex-1 items-center gap-3 md:min-w-[200px]">
         <AvaAvatar
           size="md"
           pulse={typing}
           glow={avatarGlow}
           anchorKey="header"
         />
-        <div className="leading-tight">
-          <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.01em] text-slate-800">
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="text-[16px] font-semibold tracking-[-0.01em] text-slate-800">
             Ava
           </div>
           <div className="flex items-center gap-1 text-[12px] text-slate-500">
@@ -1047,24 +1614,55 @@ function Header({
               <span className="animate-fade-in italic text-coral">typing…</span>
             ) : (
               <>
-                <MapPin className="h-3 w-3" />
-                <span>Castara · Tobago</span>
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span className="truncate">Castara · Tobago</span>
                 {chapter && (
-                  <span className="text-slate-400">· {prettyChapter(chapter)}</span>
+                  <span className="hidden shrink-0 text-slate-400 sm:inline">
+                    · {prettyChapter(chapter)}
+                  </span>
                 )}
               </>
             )}
           </div>
         </div>
       </div>
-      {onReset && (
-        <button
-          onClick={onReset}
-          className="rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs text-slate-500 transition hover:border-coral/40 hover:bg-sand-50 hover:text-slate-700"
+
+      {/*
+       * Subtle progress bar — was a labelled "Faction" gamified XP bar; now a
+       * quiet warmth meter, no label, no perpetual gradient flow, no XP score
+       * shouting from the corner. The points orb still flies to it on send,
+       * which adds a soft sense of reward without the mobile-game framing.
+       */}
+      <div
+        className="flex min-w-0 w-[min(14rem,calc(100vw-9.5rem))] shrink flex-col items-stretch gap-1.5 sm:w-56 md:w-64"
+        title="Conversation warmth"
+      >
+        <div
+          data-faction-bar-track
+          className="relative h-1.5 w-full overflow-hidden rounded-full bg-sand-200/80 shadow-[inset_0_1px_3px_rgba(0,0,0,0.05)] sm:h-2"
         >
-          End session
-        </button>
-      )}
+          <div
+            data-faction-bar-fill
+            className="relative h-full overflow-hidden rounded-full transition-[width] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+            style={{
+              width: `${barPct}%`,
+              transformOrigin: '0% 100%',
+            }}
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-orange-300 to-coral/80" />
+            <div
+              data-faction-bar-shimmer
+              className="pointer-events-none absolute inset-y-0 left-0 w-[42%] bg-gradient-to-r from-transparent via-white/45 to-transparent opacity-0"
+            />
+          </div>
+        </div>
+        <span
+          ref={scoreRef}
+          className="sr-only text-xs tabular-nums"
+        >
+          {factionPoints}
+        </span>
+      </div>
     </header>
   );
 }
@@ -1222,6 +1820,31 @@ function Typewriter({
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.sender === 'user';
   const useTypewriter = !isUser && message.typewriter && message.kind === 'text';
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!message.animate) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        el,
+        {
+          y: isUser ? 16 : 14,
+          opacity: 0,
+          scale: 0.96,
+        },
+        {
+          y: 0,
+          opacity: 1,
+          scale: 1,
+          duration: 0.44,
+          ease: 'power3.out',
+        },
+      );
+    }, el);
+    return () => ctx.revert();
+  }, [message.id, message.animate, isUser]);
 
   // Base bubble container classes. Shimmer + tone stack onto the
   // standard rounded chrome. Shimmer requires overflow: hidden which
@@ -1233,10 +1856,9 @@ function MessageBubble({ message }: { message: UIMessage }) {
 
   return (
     <div
+      ref={wrapRef}
       data-bubble-id={message.id}
-      className={`flex items-end gap-2 ${isUser ? 'flex-row-reverse' : ''} ${
-        message.animate ? 'animate-message-appear' : ''
-      }`}
+      className={`flex items-end gap-2 ${isUser ? 'flex-row-reverse' : ''}`}
     >
       {!isUser && <AvaAvatar size="sm" />}
       <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
@@ -1304,11 +1926,25 @@ function MessageBubble({ message }: { message: UIMessage }) {
 function GifMessage({ url, title }: { url: string; title?: string }) {
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        el,
+        { y: 20, opacity: 0, scale: 0.96 },
+        { y: 0, opacity: 1, scale: 1, duration: 0.45, ease: 'power3.out' },
+      );
+    }, el);
+    return () => ctx.revert();
+  }, [url]);
 
   if (err) return null;
 
   return (
-    <div className="flex animate-message-appear items-end gap-2">
+    <div ref={wrapRef} className="flex items-end gap-2">
       <AvaAvatar size="sm" />
       <div className="max-w-[65%] overflow-hidden rounded-2xl border border-sand-200 bg-sand-100 shadow-md">
         {!loaded && (
@@ -1361,7 +1997,7 @@ function Composer({
   onChange: (v: string) => void;
   onSend: () => void;
   disabled: boolean;
-  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const canSend = value.trim().length > 0 && !disabled;
 
@@ -1380,8 +2016,7 @@ function Composer({
           }}
           rows={1}
           placeholder="Say anything to Ava…"
-          disabled={disabled}
-          className="min-h-[44px] max-h-40 flex-1 resize-none rounded-2xl border border-sand-300 bg-white px-4 py-2.5 text-[15px] leading-[1.35] text-slate-700 shadow-sm placeholder:text-slate-400 focus:border-coral focus:outline-none focus:ring-2 focus:ring-coral/30 disabled:opacity-60"
+          className="min-h-[44px] max-h-40 flex-1 resize-none rounded-2xl border border-sand-300 bg-white px-4 py-2.5 text-[15px] leading-[1.35] text-slate-700 shadow-sm placeholder:text-slate-400 focus:border-coral focus:outline-none focus:ring-2 focus:ring-coral/30"
         />
         <button
           onClick={onSend}

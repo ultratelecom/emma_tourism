@@ -3,7 +3,7 @@
  *
  * Lightweight GPT-based profile field extraction that runs in the background
  * after Ava's streaming reply has been sent to the client. It uses a small,
- * fast model (gpt-4o-mini) with a concise few-shot prompt instead of the
+ * fast model (gpt-5.4-mini) with a concise few-shot prompt instead of the
  * heavyweight StepFun reasoning model — sufficient for straightforward answers.
  *
  * The previous StepFun extraction ran in the same request cycle, adding
@@ -17,7 +17,7 @@ import { applyExtractionResult } from './ava-db';
 import { AVA_UNIFIED_PROFILE_FIELD_HINTS } from './ava-config';
 import type { ExtractionResult, ExtractedProfileUpdate } from './ava-extract';
 
-const EXTRACTION_MODEL = 'gpt-4o-mini';
+const EXTRACTION_MODEL = 'gpt-5.4-mini';
 const EXTRACTION_TIMEOUT_MS = 8000;
 
 export interface SimpleExtractionInput {
@@ -94,7 +94,7 @@ Examples:
         field_key,
         value: value as string | string[] | number | null,
         confidence: 0.9,
-        evidence: '[simple-extraction/gpt-4o-mini]',
+        evidence: '[simple-extraction/gpt-5.4-mini]',
       }));
 
     if (updates.length === 0) return;
