@@ -416,14 +416,23 @@ OUTPUT:
 
   // Build updates with normalization + literal-quote validation against RECENT messages.
   const recentMessagesText = recentUserMessages.map((m) => m.content.toLowerCase()).join(' ');
-  const MIN_CONFIDENCE = 0.7;
+  const MIN_CONFIDENCE = 0.85; // Increased from 0.7 to reduce hallucinations
   const SOFT_KEYS = new Set(['age_bracket', 'gender', 'education_level']);
+
+  // DEBUG: Log what capture model returned before filtering
+  console.log(
+    `[ava.v2.capture] Model returned ${Object.keys(captured).length} fields:`,
+    Object.entries(captured).map(([k, v]) => `${k}:${v.confidence.toFixed(2)}`).join(', ')
+  );
 
   const updates: ExtractedProfileUpdate[] = [];
   for (const [key, raw] of Object.entries(captured)) {
     const spec = AVA_PROFILE_FIELDS[key];
     if (!spec) continue;
-    if (raw.confidence < MIN_CONFIDENCE) continue;
+    if (raw.confidence < MIN_CONFIDENCE) {
+      console.log(`[ava.v2.capture] Dropped ${key} (confidence ${raw.confidence.toFixed(2)} < ${MIN_CONFIDENCE})`);
+      continue;
+    }
 
     const isSoftInference = SOFT_KEYS.has(key) || key === 'current_country';
     // Literal quote is REQUIRED for non-soft fields. Validate against ANY recent message.
@@ -541,7 +550,17 @@ export async function persistAvaV2Reply(params: {
       // CRITICAL: Check completion AFTER capture finishes, not before. Otherwise
       // we read stale openFieldKeys and mark session complete prematurely (race condition).
       const stillOpen = await getOpenFieldKeys(params.userId).catch(() => null);
-      if (stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen)) {
+      const isComplete = stillOpen !== null && isAvaSurveyEffectivelyComplete(stillOpen);
+      
+      // DEBUG: Log completion check details to diagnose premature completion
+      console.log(
+        `[ava.v2.completion] Open fields: ${stillOpen?.length ?? 'null'}, ` +
+        `isComplete: ${isComplete}, ` +
+        `fields: [${stillOpen?.slice(0, 5).join(', ')}${(stillOpen?.length ?? 0) > 5 ? '...' : ''}]`
+      );
+      
+      if (isComplete) {
+        console.log('[ava.v2.completion] Marking session complete');
         await setSessionStatus(params.sessionId, 'complete').catch(console.error);
       }
     })().catch((err) => console.error('[ava.v2] capture failed (non-fatal)', err)),
